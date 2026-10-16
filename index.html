@@ -149,6 +149,8 @@ figure { margin: 0; min-width: 0; display: grid; gap: 8px; }
 .map summary { cursor: pointer; font-weight: 600; }
 .mapgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px 20px; margin-top: 12px; }
 .foot { color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); padding-top: 16px; }
+.foot a, .brand a { color: var(--accent); font-weight: 500; text-underline-offset: 3px; }
+.feedback { display: inline-block; margin-top: 2px; font-size: .88rem; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -160,6 +162,7 @@ figure { margin: 0; min-width: 0; display: grid; gap: 8px; }
       <span class="tag">Datalog explorer</span>
       <h1>ECU Log Doctor</h1>
       <p>Load a datalog CSV and see every channel as its own graph on one timeline. Hover to read all values at the same moment, and compare any two channels to see how they relate.</p>
+      <a class="feedback" href="https://github.com/benmundackal/ecu-log-doctor/issues/new/choose" target="_blank" rel="noopener">Report a problem or suggest a feature</a>
     </div>
     <label class="drop" id="drop" for="file">
       <input type="file" id="file" accept=".csv,.txt,.log,text/csv">
@@ -226,7 +229,7 @@ figure { margin: 0; min-width: 0; display: grid; gap: 8px; }
     <p class="okline" style="margin-top:8px">The flags at the top match columns by name. If one is matched wrong, pick the right column here.</p>
     <div class="mapgrid" id="map"></div>
   </details>
-  <footer class="foot">Flags are automatic and can be wrong. Use the graphs to confirm what really happened before changing a tune.</footer>
+  <footer class="foot">Flags are automatic and can be wrong. Use the graphs to confirm what really happened before changing a tune. Found a wrong result, or your logging software isn't read correctly? <a href="https://github.com/benmundackal/ecu-log-doctor/issues/new/choose" target="_blank" rel="noopener">Report a problem</a>. This project is open source on <a href="https://github.com/benmundackal/ecu-log-doctor" target="_blank" rel="noopener">GitHub</a>, and anyone can help improve it.</footer>
 </div>
 <script>
 const Core = (() => {
