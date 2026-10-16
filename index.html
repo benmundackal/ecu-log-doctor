@@ -263,14 +263,15 @@ const Core = (() => {
     { key: 'stft', label: 'Short-term fuel trim', re: [/stft|short.?term|\bst.?ft|short trim/] },
     { key: 'ltft', label: 'Long-term fuel trim', re: [/ltft|long.?term|\blt.?ft|long trim/] },
     { key: 'knock', label: 'Knock retard', re: [/knock|\bkr\b|ign\w*.*corr|timing.*corr|spark.*corr/] },
-    { key: 'timing', label: 'Ignition timing', re: [/timing|ign\w*.*adv|spark adv|ignition/], not: /corr|knock/ },
+    { key: 'timing', label: 'Ignition timing', re: [/timing|ign\w*.*adv|spark adv|ignition/], not: /corr|knock|valve|\bcam\b|vvt|vct/ },
     { key: 'afrTarget', label: 'Target AFR', re: [/(target|command|desired|cmd).*(afr|lambda|air.?fuel|equiv)|(afr|lambda|air.?fuel).*(target|command|desired)/] },
     { key: 'afr', label: 'Air/fuel ratio (wideband)', re: [/wideband|\bwb\b|afr|air.?fuel|lambda|equiv/], not: /target|command|desired|cmd/ },
-    { key: 'iat', label: 'Intake air temp', re: [/\biat\b|intake air temp|intake temp|air temp/] },
+    { key: 'iat', label: 'Intake air temp', re: [/\biat\b|intake air temp|intake temp|air temp/], not: /ambient|outside|baro/ },
     { key: 'ect', label: 'Coolant temp', re: [/\bect\b|coolant|engine temp|water temp/] },
     { key: 'tps', label: 'Throttle position', re: [/tps|throttle|pedal|accel/] },
     { key: 'speed', label: 'Vehicle speed', re: [/vehicle speed|\bvss\b|\bspeed\b|\bmph\b|km\/h/], not: /engine/ },
     { key: 'misfire', label: 'Misfire count', re: [/misfire|mis-fire/] },
+    { key: 'fuelStatus', label: 'Fuel system status (open/closed loop)', re: [/fuel ?sys\w* ?status|loop status/] },
   ];
 
   // ---------- small math helpers ----------
@@ -355,6 +356,7 @@ const Core = (() => {
     for (const k of ['stft', 'ltft', 'load', 'tps']) if (d[k] && maxOf(d[k].map(v => v == null ? null : Math.abs(v))) <= 1.5) d[k] = d[k].map(v => v == null ? null : v * 100);
     if (d.knock) d.knock = d.knock.map(v => v == null ? null : Math.abs(v));
     if (d.maf) d.units.mafVolt = maxOf(d.maf) <= 5.5 && /volt|\(v\)|\bv\b/.test(H('maf')) || maxOf(d.maf) <= 5.2;
+    if (d.tps) d.units.pedal = /pedal|accel|\bapp\b/.test(H('tps'));
     if (d.speed) d.units.speed = /km/.test(H('speed')) ? 'km/h' : 'mph';
     return d;
   }
@@ -372,13 +374,26 @@ const Core = (() => {
   // ---------- checks ----------
   // Full throttle = high load AND wide-open throttle (when both are logged), above 1,500 rpm,
   // with the tune commanding a rich mixture if a target AFR is logged, held for at least 0.5 s.
+  // Some software (VersaTuner on the NC) keeps logging the closed-loop target (~14.7) while the ECU is
+  // really in open loop. A target that never leaves stoich under full load tells us nothing.
+  function targetFrozen(d) {
+    if (!d.afrTarget) return false;
+    const c = []; for (let i = 0; i < d.n; i++) {
+      const L = d.load ? d.load[i] : null, P = d.tps ? d.tps[i] : null;
+      const w = d.load && d.tps ? (L >= 70 && P >= 50) : (L != null && L >= 70) || (P != null && P >= 80);
+      if (w && (!d.rpm || d.rpm[i] >= 1500) && d.afrTarget[i] != null) c.push(d.afrTarget[i]);
+    }
+    return c.length >= 5 && c.filter(v => v >= 14.3).length / c.length >= 0.9;
+  }
   function wotMask(d) {
+    d.targetFrozen = targetFrozen(d);
     const raw = new Array(d.n).fill(false);
     for (let i = 0; i < d.n; i++) {
       const L = d.load ? d.load[i] : null, P = d.tps ? d.tps[i] : null;
       let w = d.load && d.tps ? (L >= 70 && P >= 60) : (L != null && L >= 70) || (P != null && P >= 80);
+      if (d.fuelStatus && d.fuelStatus[i] != null) w = w && d.fuelStatus[i] === 4;
       if (w && d.rpm && !(d.rpm[i] >= 1500)) w = false;
-      if (w && d.afrTarget && d.afrTarget[i] != null && d.afrTarget[i] > 13.6) w = false;
+      if (w && d.afrTarget && !d.targetFrozen && d.afrTarget[i] != null && d.afrTarget[i] > 13.6) w = false;
       raw[i] = w;
     }
     const idx = []; raw.forEach((w, i) => { if (w) idx.push(i); });
@@ -388,23 +403,6 @@ const Core = (() => {
   }
   const isWot = (d, i) => d.wot[i];
 
-  // Was the knock mostly before full warm-up? Also: how long the engine spent at the same rpm/load warm with no knock.
-  function knockWarm(d, idx) {
-    if (!d.ect) return {};
-    const cold = 87.8; // 190°F
-    const withE = idx.filter(i => d.ect[i] != null); if (!withE.length) return {};
-    const coldShare = withE.filter(i => d.ect[i] < cold).length / withE.length;
-    const ectF = toF(mean(pick(d.ect, withE)));
-    let warmClean = 0;
-    if (d.rpm && d.load) {
-      const r1 = pct(pick(d.rpm, idx), 0.05), r2 = pct(pick(d.rpm, idx), 0.95), l1 = pct(pick(d.load, idx), 0.05), l2 = pct(pick(d.load, idx), 0.95);
-      for (let i = 1; i < d.n; i++) {
-        if (d.ect[i] == null || d.ect[i] < cold || (d.knock[i] != null && d.knock[i] >= 0.5)) continue;
-        if (d.rpm[i] >= r1 && d.rpm[i] <= r2 && d.load[i] >= l1 && d.load[i] <= l2) { const dt = d.t[i] - d.t[i - 1]; if (dt > 0 && dt < 2) warmClean += dt; }
-      }
-    }
-    return { coldShare, ectF, warmClean };
-  }
   function knock(d) {
     if (!d.knock) return null;
     const idx = []; for (let i = 0; i < d.n; i++) if (d.knock[i] >= 0.5) idx.push(i);
@@ -420,12 +418,24 @@ const Core = (() => {
       found.push(s + '.');
     }
     if (d.iat) { const ti = mean(pick(d.iat, idx)); if (ti > 40) found.push(`Intake air was about ${fmtT(ti)} when it knocked. Hot air makes knock more likely.`); }
+    let ectF = null, coldShare = null, warmClean = 0;
+    if (d.ect) {
+      ectF = toF(mean(pick(d.ect, idx)));
+      coldShare = ev.filter(e => mean(pick(d.ect, e.idx)) < 87.8).length / ev.length;
+      if (d.rpm && d.load) {
+        const r1 = pct(pick(d.rpm, idx), 0.1) - 100, r2 = pct(pick(d.rpm, idx), 0.9) + 100, l1 = pct(pick(d.load, idx), 0.1) - 3, l2 = pct(pick(d.load, idx), 0.9) + 3;
+        let n = 0; for (let i = 0; i < d.n; i++) if (d.ect[i] >= 90 && d.rpm[i] >= r1 && d.rpm[i] <= r2 && d.load[i] >= l1 && d.load[i] <= l2 && !(d.knock[i] >= 0.5)) n++;
+        warmClean = n * dtOf(d);
+      }
+      if (coldShare >= 0.7) found.push(`${Math.round(coldShare * 100)}% of the events happened before the coolant reached 190°F (average ${Math.round(ectF)}°F at knock).${warmClean >= 30 ? ` The same rpm and load with warm coolant: ${Math.round(warmClean)} s, no knock.` : ''}`);
+    }
+    const cruiseShare = d.speed ? ev.filter(e => mean(pick(d.speed, e.idx)) >= (d.units.speed === 'km/h' ? 64 : 40)).length / ev.length : null;
     const sev = (mx >= 4 || ev.length >= 6) ? 'crit' : 'warn';
     const chart = d.rpm && d.load
       ? { type: 'scatter', x: d.rpm, y: d.load, hi: d.knock.map(v => v >= 0.5), xlabel: 'Engine speed (rpm)', ylabel: 'Load (%)', hiLabel: 'Knock', loLabel: 'All other samples' }
       : { type: 'line', x: d.t, series: [{ y: d.knock, cls: 'crit', name: 'Knock retard (°)' }], ylabel: 'Retard (°)' };
     return {
-      id: 'knock', facts: Object.assign({ where, mx, events: ev.length, iatF: d.iat ? toF(mean(pick(d.iat, idx))) : null, single: ev.every(e => e.idx.length <= 2) }, knockWarm(d, idx)), focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
+      id: 'knock', facts: { where, mx, events: ev.length, iatF: d.iat ? toF(mean(pick(d.iat, idx))) : null, single: ev.every(e => e.idx.length <= 2), ectF, coldShare, warmClean, cruiseShare }, focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
       found,
       why: 'Knock is fuel exploding instead of burning smoothly. The ECU protects the engine by pulling timing, which costs power. Repeated or heavy knock can damage pistons, ring lands and rod bearings.',
       fixes: [
@@ -443,11 +453,13 @@ const Core = (() => {
     const noPull = { sev: 'skip', title: 'Full-throttle mixture', short: 'This log has no full-throttle pull. Do a 3rd-gear pull from about 2,500 rpm to redline to test it.' };
     const all = []; for (let i = 0; i < d.n; i++) if (d.wot[i]) all.push(i);
     if (all.length > d.n * 0.3) return { sev: 'skip', title: 'Full-throttle mixture', short: `${Math.round(all.length / d.n * 100)}% of this log looks like full throttle, which is not realistic. The load or throttle column is probably matched wrong or uses a different scale. Check "Columns used" below.` };
-    // Ignore fuel-cut / sensor-saturated readings: a wideband above 16.5 under real full throttle would mean the engine is barely running.
-    const wot = all.filter(i => d.afr[i] != null && d.afr[i] <= 16.5);
+    // Ignore fuel-cut / sensor-saturated readings (above 18). A real lean pull can read 17, so do not cut lower.
+    const wot = settledWot(d).filter(i => d.afr[i] != null && d.afr[i] <= 18);
     if (wot.length < 5) return noPull;
     const afrW = pick(d.afr, wot), mx = maxOf(afrW), iMax = wot[afrW.indexOf(mx)];
-    const leanIdx = wot.filter(i => d.afr[i] >= 13.2 || (d.afrTarget && d.afrTarget[i] != null && d.afr[i] - d.afrTarget[i] >= 0.6 && d.afr[i] >= 12.8));
+    const leanIdx0 = wot.filter(i => d.afr[i] >= 13.2 || (d.afrTarget && !d.targetFrozen && d.afrTarget[i] != null && d.afr[i] - d.afrTarget[i] >= 0.6 && d.afr[i] >= 12.8));
+    // Only lean stretches that last 0.4 s or more count. A single sample is often sensor lag.
+    const leanIdx = clusters(leanIdx0, d.t, 0.25).filter(c => d.t[c.end] - d.t[c.start] >= 0.4).flatMap(c => c.idx);
     const share = leanIdx.length / wot.length;
     const pulls = clusters(all, d.t, 1);
     const worst = pulls.find(c => iMax >= c.start && iMax <= c.end) || pulls[0];
@@ -457,18 +469,19 @@ const Core = (() => {
     const sl = arr => arr.slice(a, b + 1);
     const bands = pulls.filter(c => c.end >= a && c.start <= b).map(c => [d.t[Math.max(c.start, a)], d.t[Math.min(c.end, b)]]);
     const chart = { type: 'line', x: sl(d.t), series: [{ y: sl(d.afr), cls: 's1', name: 'Measured AFR' }], yDomain: [10, 17], hlines: [{ y: 13.2, cls: 'crit', label: '13.2 lean limit' }], bands, ylabel: 'Air/fuel ratio', bandLabel: 'Full throttle' };
-    if (d.afrTarget) chart.series.push({ y: sl(d.afrTarget), cls: 's2', name: 'Target AFR', dash: true });
+    if (d.afrTarget && !d.targetFrozen) chart.series.push({ y: sl(d.afrTarget), cls: 's2', name: 'Target AFR', dash: true });
     if (d.rpm) { chart.series.push({ y: sl(d.rpm), cls: 'warn', name: 'RPM', axis: 'r' }); chart.y2label = 'RPM'; }
     if (!leanIdx.length) return { sev: 'ok', title: 'Full-throttle mixture is safe', short: `Richest-to-leanest at full throttle: ${minOf(afrW).toFixed(1)}–${mx.toFixed(1)} AFR.` };
-    const sev = mx >= 13.6 ? 'crit' : (leanIdx.length >= 3 ? 'warn' : 'ok');
+    const mxL = maxOf(pick(d.afr, leanIdx));
+    const sev = mxL >= 13.6 ? 'crit' : (leanIdx.length >= 3 ? 'warn' : 'ok');
     if (sev === 'ok') return { sev: 'ok', title: 'Full-throttle mixture is safe', short: `Peaked at ${mx.toFixed(1)} AFR only briefly.` };
     const leanStart = d.rpm ? rnd(minOf(pick(d.rpm, leanIdx)), 100) : null;
     const found = [`Under full throttle the air/fuel ratio reached <b>${mx.toFixed(1)}</b>${d.rpm ? ` at ${Math.round(d.rpm[iMax])} rpm` : ''}.`];
-    if (d.afrTarget && d.afrTarget[iMax] != null) found.push(`The tune asked for ${d.afrTarget[iMax].toFixed(1)} there, so it ran ${(mx - d.afrTarget[iMax]).toFixed(1)} leaner than commanded.`);
+    if (d.afrTarget && !d.targetFrozen && d.afrTarget[iMax] != null) found.push(`The tune asked for ${d.afrTarget[iMax].toFixed(1)} there, so it ran ${(mx - d.afrTarget[iMax]).toFixed(1)} leaner than commanded.`);
     found.push(`${Math.round(share * 100)}% of full-throttle time was leaner than 13.2${leanStart ? `, starting around ${leanStart} rpm` : ''}.`);
     found.push(`Found ${pulls.length} full-throttle pull${pulls.length > 1 ? 's' : ''}. The graph zooms in on the worst one.`);
     return {
-      id: 'lean', facts: { mx, leanStart, risesWithRpm: !!(d.rpm && leanStart && leanStart > 4000) }, focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR hit ${mx.toFixed(1)} under load. Safe target is about 12.5–13.0.`,
+      id: 'lean', facts: { mx, leanStart, risesWithRpm: !!(d.rpm && leanStart && leanStart > 4000) }, focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR held at ${mxL.toFixed(1)} or leaner under load. Safe target is about 12.5–13.0.`,
       found,
       why: 'A lean mixture under load burns hotter. It raises cylinder and exhaust temperatures and makes knock much more likely. Naturally aspirated engines are usually safe around 12.5–13.0 AFR at full throttle.',
       fixes: [
@@ -492,6 +505,8 @@ const Core = (() => {
       if (d.rpm && d.rpm[i] < 600) continue;
       if (isWot(d, i) || (d.tps && d.tps[i] >= 60)) continue;
       if (d.afr && d.afr[i] != null && (d.afr[i] > 15.8 || d.afr[i] < 13.6)) continue;
+      if (d.fuelStatus && d.fuelStatus[i] !== 2) continue;
+      if (d.tps && d.tps[i] != null) { let j = i; while (j > 0 && d.t[i] - d.t[j] < 1) j--; if (d.tps[j] != null && Math.abs(d.tps[i] - d.tps[j]) > 5) continue; }
       cl.push(i);
     }
     if (cl.length < 30) return { sev: 'skip', title: 'Fuel trims', short: 'Not enough part-throttle driving in this log to judge trims. Log at least a few minutes of normal driving.' };
@@ -504,7 +519,8 @@ const Core = (() => {
       step = axis === 'maf' ? (d.units.mafVolt ? 0.2 : Math.max(1, rnd((hi - lo) / 10, 1))) : 500;
       const bins = new Map();
       for (const i of cl) { const v = src[i]; if (v == null) continue; const b = Math.floor(v / step) * step; if (!bins.has(b)) bins.set(b, []); bins.get(b).push(tot[i]); }
-      [...bins.keys()].sort((a, b) => a - b).forEach(b => { const a = bins.get(b); if (a.length >= 15) rows.push({ b, n: a.length, m: mean(a) }); });
+      const minN = Math.max(15, Math.ceil(10 / dtOf(d)));
+      [...bins.keys()].sort((a, b) => a - b).forEach(b => { const a = bins.get(b); if (a.length >= minN) rows.push({ b, n: a.length, m: mean(a) }); });
     }
     const worst = rows.length ? rows.reduce((w, r) => Math.abs(r.m) > Math.abs(w.m) ? r : w) : null;
     const worstVal = worst ? worst.m : overall;
@@ -558,13 +574,14 @@ const Core = (() => {
       if (d.rpm[i] < 1500 || d.rpm[i] > 3800 || isWot(d, i)) continue;
       if (d.load && (d.load[i] < 15 || d.load[i] > 60)) continue;
       if (d.tps && (d.tps[i] < 3 || d.tps[i] > 40)) continue;
+      if (d.ect && !(d.ect[i] >= 80)) continue;
       idx.push(i);
     }
     if (idx.length < 50) return null;
     const m = median(pick(d.afr, idx));
     if (m >= 14.1) return { sev: 'ok', title: 'Cruise mixture on target', short: `Median AFR while cruising: ${m.toFixed(1)}. That is right where it should be for economy.` };
     return {
-      id: 'cruise', facts: { m }, sev: 'warn', title: 'Rich while cruising', short: `Median cruise AFR is ${m.toFixed(1)}. Should be about 14.7.`,
+      id: 'cruise', facts: { m, olShare: d.fuelStatus ? idx.filter(i => d.fuelStatus[i] !== 2).length / idx.length : null }, sev: 'warn', title: 'Rich while cruising', short: `Median cruise AFR is ${m.toFixed(1)}. Should be about 14.7.`,
       found: [`While cruising (1,500–3,800 rpm, part throttle), the median air/fuel ratio was <b>${m.toFixed(1)}</b>.`, `That burns roughly ${Math.round((14.7 / m - 1) * 100)}% more fuel than a 14.7 mixture for the same air.`],
       why: 'At steady cruise a gasoline engine should sit near 14.7 (stoichiometric). Running richer than that wastes fuel and can foul plugs. It usually means the ECU is in open loop, the coolant is not fully warm, or the open-loop fuel table reaches into cruise areas.',
       fixes: ['Check that the engine was fully warm. A cold engine adds fuel on purpose.', 'Look at the open-loop / closed-loop switch thresholds in the tune. If cruise load triggers open loop, raise the threshold.', 'Make sure the upstream O2 sensor is working, so the ECU can stay in closed loop.'],
@@ -580,6 +597,7 @@ const Core = (() => {
     if (sev === 'ok') return { sev: 'ok', title: 'Intake temperature normal', short: `Peaked at ${fmtT(mx)}, ${fmtDT(delta)} above the coolest reading.` };
     const hot = []; for (let i = 0; i < d.n; i++) if (d.iat[i] != null && d.iat[i] >= mx - 4) hot.push(i);
     const idleHot = hot.filter(i => (d.speed ? d.speed[i] < 3 : d.rpm ? d.rpm[i] < 1100 : false)).length / hot.length > 0.5;
+    if (idleHot && sev === 'crit') sev = 'warn'; // heat soak at a stop clears once moving
     const found = [`Intake air peaked at <b>${fmtT(mx)}</b>.`, `That is ${fmtDT(delta)} above the coolest reading in this log, ${fmtT(p5)}, which is close to the outside air temperature.`];
     if (idleHot) found.push('The hottest readings came while stopped or idling. That is heat soak: with no airflow, the engine bay cooks the intake.');
     const chart = { type: 'line', x: d.t, series: [{ y: d.iat.map(v => v == null ? null : toF(v)), cls: 'warn', name: 'Intake air (°F)' }], hlines: [{ y: toF(55), cls: 'crit', label: '131°F' }], ylabel: 'Intake air (°F)' };
@@ -611,7 +629,10 @@ const Core = (() => {
       fixes: ['Check coolant level and burp air out of the system.', 'Confirm the radiator fan turns on at the right temperature.', 'Inspect the radiator for blockage and the water pump for leaks or noise.'],
       chart,
     };
-    if (warm.length > 50 && wm < 80) return {
+    const tail = []; for (let i = 0; i < d.n; i++) if (d.ect[i] != null && d.t[i] >= tEnd - 120) tail.push(i);
+    const stillRising = tail.length > 2 && d.ect[tail[tail.length - 1]] - d.ect[tail[0]] > 2;
+    if (tEnd < 600 || stillRising) { if (wm < 80) return { sev: 'skip', title: 'Coolant temperature', short: 'The engine was still warming up when the log ended. Log at least 10 minutes to judge warm-up.' }; }
+    else if (warm.length > 50 && wm < 80) return {
       id: 'ect', facts: { kind: 'cold' }, sev: 'warn', title: 'Engine not reaching temperature', short: `Coolant stayed around ${fmtT(wm)} after warm-up.`,
       found: [`After the first few minutes, coolant sat around <b>${fmtT(wm)}</b>. A warm engine normally sits between 190 and 205°F (88–96°C).`],
       why: 'A cold engine runs rich on purpose (warm-up enrichment) and burns noticeably more fuel. A thermostat stuck open is a common cause of a sudden drop in mpg.',
@@ -676,6 +697,85 @@ const Core = (() => {
     };
   }
 
+  // ---------- new checks ----------
+  // Median time between samples (s), for turning sample counts into seconds.
+  const dtOf = d => { const x = []; for (let i = 1; i < Math.min(d.n, 400); i++) if (d.t[i] != null && d.t[i - 1] != null) x.push(d.t[i] - d.t[i - 1]); return median(x) || 0.1; };
+
+  // Load flat at high load: the tune is capping load, so fuel stops rising with it.
+  function loadcap(d) {
+    if (!d.load || !d.rpm) return null;
+    // Pool every high-load, mostly-open-throttle sample above 2,500 rpm, from all pulls.
+    const w = []; for (let i = 0; i < d.n; i++) if (d.load[i] >= 70 && d.rpm[i] >= 2500 && (!d.tps || d.tps[i] >= 50)) w.push(i);
+    if (w.length < 10) return null;
+    const top = maxOf(pick(d.load, w));
+    const near = w.filter(i => d.load[i] >= top - 0.6);
+    const share = near.length / w.length;
+    const r = pick(d.rpm, near), rpmFrom = rnd(minOf(r), 100), rpmTo = rnd(maxOf(r), 100);
+    if (share < 0.6 || rpmTo - rpmFrom < 800) return maxOf(pick(d.rpm, w)) - minOf(pick(d.rpm, w)) >= 1000 ? { sev: 'ok', title: 'Load not capped at high load', short: `High-load samples peaked at ${Math.round(top)}% and moved with rpm as they should.` } : null;
+    const afrMed = d.afr ? median(pick(d.afr, near).filter(v => v != null && v <= 18)) : null;
+    const found = [`Under high load above 2,500 rpm, load sat within 0.6% of <b>${Math.round(top)}%</b> for ${Math.round(share * 100)}% of the time, from ${rpmFrom} to ${rpmTo} rpm.`, 'On a healthy engine, full-throttle load rises and falls with rpm. A flat line means something is holding it.'];
+    if (isFinite(afrMed)) found.push(`The mixture during the flat part was about ${afrMed.toFixed(1)} AFR.`);
+    return {
+      id: 'loadcap', facts: { cap: top, share, rpmFrom, rpmTo, afrMed: isFinite(afrMed) ? afrMed : null }, sev: isFinite(afrMed) && afrMed > 13.2 ? 'crit' : 'warn',
+      title: 'Load flat at high load', short: `Load held flat at ${Math.round(top)}% from ${rpmFrom} to ${rpmTo} rpm.`, found,
+      why: 'Most ECUs, including the Mazda NC\'s, look up fuel and timing by rpm and load. If load is capped, full-throttle fuel stops rising, and the engine can run lean exactly when it needs fuel most.',
+      chart: { type: 'line', x: d.t, series: [{ y: d.load, cls: 's1', name: 'Load (%)' }, { y: d.rpm, cls: 'warn', name: 'RPM', axis: 'r' }], ylabel: 'Load (%)', y2label: 'RPM' },
+    };
+  }
+
+  // Fuel cut while the pedal is slightly pressed (felt as a sudden loss of power at very light pedal).
+  function fuelcut(d) {
+    if (!d.tps || !d.units.pedal || !d.rpm || !(d.afr || d.fuelStatus)) return null;
+    const kmh = d.units.speed === 'km/h';
+    // A cut sample: fuel off (very lean reading, or open loop at low load) while rolling above 1,300 rpm.
+    const cut = i => (d.afr && d.afr[i] != null && d.afr[i] >= 18.4) || (d.fuelStatus && d.fuelStatus[i] === 4 && d.load && d.load[i] < 30);
+    const idx = []; for (let i = 0; i < d.n; i++) if (d.rpm[i] >= 1300 && (!d.speed || d.speed[i] >= (kmh ? 16 : 10)) && cut(i)) idx.push(i);
+    // Count it only if the pedal sat at 0.8–4% from 0.5 s before the cut started until 0.4 s after.
+    // That skips normal foot-off fuel cut, and the lean reading that lingers when you press the pedal again.
+    const light = i => d.tps[i] != null && d.tps[i] >= 0.8 && d.tps[i] <= 4;
+    const ev = clusters(idx, d.t, 0.3).filter(c => {
+      const t0 = d.t[c.start];
+      for (let j = c.start; j >= 0 && d.t[j] >= t0 - 0.5; j--) if (!light(j)) return false;
+      for (let j = c.start; j < d.n && d.t[j] <= t0 + 0.4; j++) if (!light(j)) return false;
+      return d.t[c.start] - d.t[0] > 0.5;
+    });
+    if (ev.length < 3) return null;
+    const evIdx = ev.map(c => c.start), pedalMax = maxOf(pick(d.tps, evIdx)), rpmMed = rnd(median(pick(d.rpm, evIdx)), 100);
+    return {
+      id: 'fuelcut', facts: { events: ev.length, pedalMax, rpmMed }, focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev: 'warn',
+      title: 'Fuel cut at light pedal', short: `Fuel cut ${ev.length} times with the pedal at 0.8–${pedalMax.toFixed(1)}%.`,
+      found: [`The engine cut fuel <b>${ev.length} times</b> while the pedal was slightly pressed (up to ${pedalMax.toFixed(1)}%), mostly around ${rpmMed} rpm.`, 'Normal decel fuel cut happens with your foot fully off the pedal.'],
+      why: 'On drive-by-wire cars, a very small pedal input can leave the throttle plate closed. The ECU then treats it as coasting and cuts fuel, which feels like the engine suddenly stops pulling.',
+      chart: { type: 'line', x: d.t, series: [{ y: d.tps, cls: 's1', name: 'Pedal (%)' }, ...(d.afr ? [{ y: d.afr, cls: 'warn', name: 'AFR', axis: 'r' }] : [])], ylabel: 'Pedal (%)', y2label: 'AFR' },
+    };
+  }
+
+  // Mixture leaning out at the top of the rev range during full throttle.
+  function hle(d) {
+    if (!d.afr || !d.rpm) return null;
+    const set = settledWot(d).filter(i => d.afr[i] != null && d.afr[i] <= 18);
+    const mid = set.filter(i => d.rpm[i] >= 4500 && d.rpm[i] <= 5500), top = set.filter(i => d.rpm[i] >= 6000);
+    if (mid.length < 5 || top.length < 4) return null;
+    const lo = median(pick(d.afr, mid)), hi = median(pick(d.afr, top)), rise = hi - lo;
+    if (hi >= 13.2) return null; // the full-throttle mixture flag already covers this
+    if (rise < 0.4) return { sev: 'ok', title: 'Mixture steady at high rpm', short: `Full-throttle AFR ${lo.toFixed(1)} at 4,500–5,500 rpm and ${hi.toFixed(1)} above 6,000.` };
+    return {
+      id: 'hle', facts: { lo, hi, rise, from: 6000 }, sev: 'warn',
+      title: 'Leaner at high rpm', short: `AFR rose from ${lo.toFixed(1)} to ${hi.toFixed(1)} above 6,000 rpm.`,
+      found: [`At full throttle the mixture was <b>${lo.toFixed(1)}</b> AFR at 4,500–5,500 rpm and <b>${hi.toFixed(1)}</b> above 6,000 rpm.`],
+      why: 'Full-throttle mixture should stay about the same to redline. If it leans out at the top, either the tune leans it on purpose or fuel delivery is falling behind.',
+      chart: { type: 'scatter', x: pick(d.rpm, set), y: pick(d.afr, set), hi: set.map(i => d.rpm[i] >= 6000), xlabel: 'Engine speed (rpm)', ylabel: 'AFR', hiLabel: 'Above 6,000 rpm', loLabel: 'Below' },
+    };
+  }
+
+  // Full-throttle samples after the first 1.0 s of each pull. The mixture needs about a second to richen
+  // after the throttle opens, so the start of a pull is not a fair test.
+  function settledWot(d) {
+    const idx = []; for (let i = 0; i < d.n; i++) if (d.wot[i]) idx.push(i);
+    const out = []; for (const c of clusters(idx, d.t, 0.3)) for (const i of c.idx) if (d.t[i] - d.t[c.start] >= 1.0) out.push(i);
+    return out;
+  }
+
   const WANT = [
     ['knock', 'Knock retard', 'knock'],
     ['afr', 'Wideband AFR', 'lean mixture and cruise economy'],
@@ -685,21 +785,25 @@ const Core = (() => {
     ['iat', 'Intake air temperature', 'heat soak'],
     ['ect', 'Coolant temperature', 'overheating and thermostat problems'],
     ['rpm', 'Engine RPM', 'idle quality and where problems happen'],
+    ['fuelStatus', 'Fuel system status', 'open vs closed loop, for more accurate full-throttle and trim checks'],
   ];
 
   function analyze(d) {
     d.wot = wotMask(d);
-    const res = [knock, lean, trims, cruise, iat, ect, idle].map(f => f(d)).filter(Boolean);
+    const res = [knock, lean, loadcap, hle, fuelcut, trims, cruise, iat, ect, idle].map(f => f(d)).filter(Boolean);
     const order = { crit: 0, warn: 1, ok: 2, skip: 3 };
     const issues = res.filter(r => r.sev === 'crit' || r.sev === 'warn').sort((a, b) => order[a.sev] - order[b.sev]);
     const FOCUS = {
-      knock: { chans: ['rpm', 'load', 'knock', 'timing', 'iat'], rel: ['rpm', 'load', 'knock'] },
+      knock: { chans: ['rpm', 'load', 'knock', 'timing', 'iat', 'ect'], rel: ['rpm', 'load', 'knock'] },
       lean: { chans: ['afr', 'afrTarget', 'rpm', 'tps', 'load'], rel: ['rpm', 'afr', 'tps'] },
       trims: { chans: ['stft', 'ltft', 'maf', 'afr', 'rpm'], rel: ['maf', 'ltft', 'stft'] },
       cruise: { chans: ['afr', 'rpm', 'load', 'tps', 'ect'], rel: ['load', 'afr', 'rpm'] },
       iat: { chans: ['iat', 'speed', 'rpm', 'ect'], rel: ['speed', 'iat', 'rpm'] },
       ect: { chans: ['ect', 'iat', 'speed', 'rpm'], rel: ['speed', 'ect', 'iat'] },
       idle: { chans: ['rpm', 'tps', 'speed', 'ect', 'maf'], rel: ['ect', 'rpm', 'speed'] },
+      loadcap: { chans: ['load', 'rpm', 'tps', 'afr'], rel: ['rpm', 'load', 'afr'] },
+      hle: { chans: ['afr', 'rpm', 'tps', 'load'], rel: ['rpm', 'afr', 'load'] },
+      fuelcut: { chans: ['tps', 'afr', 'rpm', 'speed', 'fuelStatus'], rel: ['tps', 'afr', 'rpm'] },
     };
     issues.forEach(i => Object.assign(i, FOCUS[i.id] || {}));
     const passed = res.filter(r => r.sev === 'ok');
@@ -815,7 +919,7 @@ const Core = (() => {
       }
       case 'lean': {
         if (allStock) a.note = 'On a fully stock car, factory full-throttle fueling is normally rich and safe. A lean reading here is more likely a sensor or fuel-delivery problem than a tune problem.';
-        if (swap) { a.note = 'On a swapped engine, check the tune\'s engine size and load limit first. If load is calculated wrong or capped, full-throttle fuel stops rising and the engine goes lean.'; a.check.push(dispCheck); }
+        if (swap) { a.note = 'On a swapped engine, check the tune\'s engine size and load limit first. If load is calculated wrong or capped, full-throttle fuel stops rising and the engine goes lean.'; a.check.push(dispCheck); a.check.push('If this log also shows "Load flat at high load", fix that first.'); }
         if (S.injectors === 'upgraded' || swap) a.check.push(injCheck);
         a.check.push('Rule out a false reading. Check for exhaust leaks ahead of the O2 sensor. If you use an add-on wideband, do its free-air calibration.');
         a.check.push(f.risesWithRpm ? 'The lean starts high in the rev range, which points at fuel delivery. Check fuel pressure under load, the fuel filter and the pump.' : 'Check fuel pressure under load, the fuel filter and the pump.');
@@ -1019,7 +1123,7 @@ if (typeof module !== 'undefined') module.exports = Core;
     const ex = $('#ex'); if (ex) ex.onclick = () => load(Core.sample(), { example: true });
   }
   // car setup (per-viewer convenience, kept in this browser only)
-  let setup = { intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown' };
+  let setup = { intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown', software: 'other' };
   try { const v = JSON.parse(localStorage.getItem('eld-setup') || 'null'); if (v && typeof v === 'object') setup = Object.assign(setup, v); } catch (e) { }
   const saveSetup = () => { try { localStorage.setItem('eld-setup', JSON.stringify(setup)); } catch (e) { } };
   const openNotes = new Set();
