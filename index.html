@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Explore an ECU datalog CSV: every channel as its own synced graph, with relationships between channels and automatic flags.">
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>ECU Log Doctor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: datalog workbench. Upload strip, short flags, then a channel picker beside synced strip charts, then a relationship plot. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa; --ink: #16202b; --muted: #586474; --line: #d6dce3;
+  --accent: #1d4ed8; --accent-soft: #e3eaff; --accent-ink: #ffffff;
+  --crit: #c62828; --crit-soft: #fdecec; --warn: #a85d00; --warn-soft: #fff3e0; --ok: #2e7d32; --ok-soft: #e8f4e9;
+  --grid: #e6eaef; --cursor: #16202b; --band-knock: rgba(198, 40, 40, .14); --band-wot: rgba(29, 78, 216, .08);
+  --c1: #1d4ed8; --c2: #c2410c; --c3: #0f766e; --c4: #7c3aed; --c5: #b91c1c; --c6: #4d7c0f;
+  --g1: #2563eb; --g2: #e0a100; --g3: #d32f2f;
+  --f-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1319; --surface: #151c24; --surface-2: #1a232d; --ink: #e6ebf1; --muted: #93a0b0; --line: #26313d;
+  --accent: #7b9cff; --accent-soft: #1d2a4d; --accent-ink: #0e1319;
+  --crit: #ff6f6f; --crit-soft: #3a1b1d; --warn: #f2a540; --warn-soft: #382a15; --ok: #63c46f; --ok-soft: #17301b;
+  --grid: #212a35; --cursor: #e6ebf1; --band-knock: rgba(255, 111, 111, .2); --band-wot: rgba(123, 156, 255, .12);
+  --c1: #7b9cff; --c2: #fb923c; --c3: #2dd4bf; --c4: #b794f6; --c5: #ff6f6f; --c6: #a3d14a;
+  --g1: #5b8cff; --g2: #f2b33d; --g3: #ff6161; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e1319; --surface: #151c24; --surface-2: #1a232d; --ink: #e6ebf1; --muted: #93a0b0; --line: #26313d;
+  --accent: #7b9cff; --accent-soft: #1d2a4d; --accent-ink: #0e1319;
+  --crit: #ff6f6f; --crit-soft: #3a1b1d; --warn: #f2a540; --warn-soft: #382a15; --ok: #63c46f; --ok-soft: #17301b;
+  --grid: #212a35; --cursor: #e6ebf1; --band-knock: rgba(255, 111, 111, .2); --band-wot: rgba(123, 156, 255, .12);
+  --c1: #7b9cff; --c2: #fb923c; --c3: #2dd4bf; --c4: #b794f6; --c5: #ff6f6f; --c6: #a3d14a;
+  --g1: #5b8cff; --g2: #f2b33d; --g3: #ff6161; color-scheme: dark; }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-block: 26px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px; }
+h1, h2 { font-family: var(--f-display); text-wrap: balance; margin: 0; }
+h1 { font-size: 2.6rem; font-weight: 700; letter-spacing: .01em; line-height: 1; text-transform: uppercase; }
+h2 { font-size: 1.6rem; font-weight: 600; line-height: 1.1; }
+h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); margin: 0; font-weight: 600; }
+p { margin: 0; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+button, select, input { font: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.top { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; justify-content: space-between; }
+.brand { flex: 1 1 360px; min-width: 0; display: grid; gap: 10px; align-content: center; }
+.brand p { color: var(--muted); max-width: 62ch; }
+.brand .tag { font-family: var(--f-mono); font-size: .75rem; color: var(--accent); letter-spacing: .08em; text-transform: uppercase; }
+.drop { flex: 0 1 320px; min-width: 0; border: 2px dashed var(--line); border-radius: 10px; background: var(--surface); display: grid; place-content: center; gap: 4px; text-align: center; padding: 20px 18px; cursor: pointer; transition: border-color .15s, background .15s; position: relative; }
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop-t { display: inline-block; background: var(--accent); color: var(--accent-ink); font-weight: 600; border-radius: 6px; padding: 9px 16px; justify-self: center; }
+.drop-s { color: var(--muted); font-size: .85rem; }
+
+.source { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: .9rem; color: var(--muted); }
+.source b { color: var(--ink); font-weight: 600; }
+.badge { font-family: var(--f-mono); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; padding: 3px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 500; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.error { background: var(--crit-soft); color: var(--crit); border-radius: 8px; padding: 12px 16px; font-weight: 500; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+.notes { display: grid; gap: 12px; }
+.notes-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.notes-head p { color: var(--muted); font-size: .85rem; }
+.nlist { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 10px; }
+.note { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; align-items: baseline; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; }
+.note p { grid-column: 2; color: var(--muted); font-size: .86rem; }
+.note button { grid-column: 2; justify-self: start; margin-top: 6px; background: none; border: 1px solid var(--line); color: var(--accent); border-radius: 6px; padding: 4px 10px; font-size: .84rem; font-weight: 500; cursor: pointer; }
+.note button:hover { border-color: var(--accent); }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; align-self: center; }
+.dot.crit { background: var(--crit); } .dot.warn { background: var(--warn); } .dot.ok { background: var(--ok); }
+.okline { font-size: .86rem; color: var(--muted); }
+.okline b { color: var(--ink); font-weight: 500; }
+
+.explorer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (min-width: 980px) { .explorer { grid-template-columns: 250px minmax(0, 1fr); } .picker { position: sticky; top: max(12px, env(safe-area-inset-top, 0px)); max-height: calc(100vh - 24px); overflow: auto; } }
+.picker { padding: 14px 14px; }
+.picker summary { cursor: pointer; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; list-style: none; }
+.picker summary::-webkit-details-marker { display: none; }
+.picker summary span { font-size: .8rem; color: var(--muted); }
+.pkbody { display: grid; gap: 10px; margin-top: 12px; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button, .tb button, .relp button { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 4px 10px; font-size: .82rem; cursor: pointer; }
+.presets button:hover, .tb button:hover, .relp button:hover { border-color: var(--accent); color: var(--accent); }
+.picker input[type=search] { width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--ink); font-size: .88rem; }
+.pklist { display: grid; gap: 1px; }
+.pk { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; align-items: center; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: .88rem; }
+.pk:hover { background: var(--surface-2); }
+.pk input { accent-color: var(--accent); margin: 0; }
+.pk span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pk small { grid-column: 2; font-family: var(--f-mono); font-size: .7rem; color: var(--muted); }
+.pk.flat { opacity: .55; }
+
+.charts { min-width: 0; display: grid; gap: 10px; padding: 14px 16px 16px; }
+.tb { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+.tb-info { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .85rem; color: var(--muted); }
+.tb-info b { color: var(--ink); font-weight: 500; }
+.tb-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tog { display: inline-flex; gap: 6px; align-items: center; font-size: .82rem; color: var(--muted); margin-right: 6px; cursor: pointer; }
+.tog i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.tog input { accent-color: var(--accent); margin: 0; }
+.hint { font-size: .8rem; color: var(--muted); }
+.stack { position: relative; display: grid; gap: 0; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.strip { border-top: 1px solid var(--line); padding-top: 6px; }
+.strip:first-child { border-top: 0; padding-top: 0; }
+.sh { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding-bottom: 2px; }
+.sw { width: 10px; height: 10px; border-radius: 2px; flex: none; align-self: center; }
+.sn { font-weight: 600; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.su { font-size: .78rem; color: var(--muted); flex: none; }
+.sv { margin-left: auto; font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: 1.02rem; font-weight: 500; flex: none; }
+.strip canvas { display: block; width: 100%; height: 84px; }
+@media (min-width: 980px) { .strip canvas { height: 92px; } }
+.cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--cursor); opacity: .55; pointer-events: none; }
+.sel { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border-left: 1px solid var(--accent); border-right: 1px solid var(--accent); opacity: .6; pointer-events: none; }
+canvas.xaxis { display: block; width: 100%; height: 24px; }
+.empty { color: var(--muted); padding: 30px 0; text-align: center; }
+
+.rel { display: grid; gap: 14px; }
+.rel-head p { color: var(--muted); max-width: 70ch; margin-top: 4px; }
+.relp { display: flex; flex-wrap: wrap; gap: 6px; }
+.relc { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px 16px; }
+.relc label, .mapgrid label { display: grid; gap: 3px; font-size: .78rem; color: var(--muted); }
+select { font-size: .9rem; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); min-width: 0; width: 100%; }
+.relg { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+@media (min-width: 980px) { .relg { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); } }
+figure { margin: 0; min-width: 0; display: grid; gap: 8px; }
+#scatter { display: block; width: 100%; aspect-ratio: 16 / 10; max-height: 480px; }
+.rstat { font-size: .88rem; color: var(--muted); }
+.rstat b { color: var(--ink); font-family: var(--f-mono); font-weight: 500; }
+.grad { display: grid; grid-template-columns: auto minmax(0, 220px) auto; gap: 8px; align-items: center; font-size: .78rem; color: var(--muted); font-family: var(--f-mono); }
+.grad i { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--g1), var(--g2), var(--g3)); }
+.related { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.related p { font-size: .82rem; color: var(--muted); }
+.rr { display: grid; grid-template-columns: minmax(0, 1fr) 90px 52px; gap: 10px; align-items: center; background: none; border: 0; border-radius: 6px; padding: 6px 6px; text-align: left; color: var(--ink); cursor: pointer; font-size: .88rem; }
+.rr:hover { background: var(--surface-2); }
+.rr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr .bar { height: 6px; border-radius: 3px; background: var(--grid); position: relative; overflow: hidden; }
+.rr .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+.rr em { font-style: normal; font-family: var(--f-mono); font-size: .8rem; text-align: right; color: var(--muted); }
+
+.map summary { cursor: pointer; font-weight: 600; }
+.mapgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px 20px; margin-top: 12px; }
+.foot { color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="tag">Datalog explorer</span>
+      <h1>ECU Log Doctor</h1>
+      <p>Load a datalog CSV and see every channel as its own graph on one timeline. Hover to read all values at the same moment, and compare any two channels to see how they relate.</p>
+    </div>
+    <label class="drop" id="drop" for="file">
+      <input type="file" id="file" accept=".csv,.txt,.log,text/csv">
+      <span class="drop-t">Choose a CSV log</span>
+      <span class="drop-s">or drag the file here. It stays on your device.</span>
+    </label>
+  </header>
+  <div class="source" id="source"></div>
+  <div class="error" id="error" hidden></div>
+
+  <section class="panel notes" id="notes"></section>
+
+  <section class="explorer" id="explorer">
+    <details class="panel picker" id="picker" open>
+      <summary><h3>Channels</h3><span id="pkCount"></span></summary>
+      <div class="pkbody">
+        <div class="presets" id="presets"></div>
+        <input type="search" id="pkSearch" placeholder="Search columns" aria-label="Search columns">
+        <div class="pklist" id="pklist"></div>
+      </div>
+    </details>
+    <div class="panel charts">
+      <div class="tb">
+        <div class="tb-info"><span id="rangeLbl"></span><span id="curLbl"></span></div>
+        <div class="tb-btns">
+          <label class="tog" for="mKnock"><input type="checkbox" id="mKnock" checked><i style="background:var(--band-knock)"></i>Knock</label>
+          <label class="tog" for="mWot"><input type="checkbox" id="mWot" checked><i style="background:var(--band-wot)"></i>Full throttle</label>
+          <button type="button" id="bLeft" aria-label="Earlier">◀</button>
+          <button type="button" id="bRight" aria-label="Later">▶</button>
+          <button type="button" id="bIn">Zoom in</button>
+          <button type="button" id="bOut">Zoom out</button>
+          <button type="button" id="bReset">Whole log</button>
+        </div>
+      </div>
+      <p class="hint">Hover, or touch and slide, to read every channel at one moment. Drag across a graph with the mouse to zoom into that stretch.</p>
+      <div class="stack" id="stack"></div>
+      <canvas class="xaxis" id="xaxis"></canvas>
+    </div>
+  </section>
+
+  <section class="panel rel">
+    <div class="rel-head">
+      <h2>How channels relate</h2>
+      <p>Plot one channel against another, colored by a third. Uses the stretch of log shown in the graphs above, so zoom in to study one pull or one stop.</p>
+    </div>
+    <div class="relp" id="relPresets"></div>
+    <div class="relc">
+      <label for="rx">Across (X)<select id="rx"></select></label>
+      <label for="ry">Up (Y)<select id="ry"></select></label>
+      <label for="rc">Color by<select id="rc"></select></label>
+    </div>
+    <div class="relg">
+      <figure>
+        <canvas id="scatter" aria-label="Scatter plot of the chosen channels"></canvas>
+        <div class="rstat" id="rstat"></div>
+        <div class="grad" id="grad" hidden><span id="gLo"></span><i></i><span id="gHi"></span></div>
+      </figure>
+      <div class="related" id="related"></div>
+    </div>
+  </section>
+
+  <details class="panel map" id="mapbox">
+    <summary>Columns used for the automatic flags</summary>
+    <p class="okline" style="margin-top:8px">The flags at the top match columns by name. If one is matched wrong, pick the right column here.</p>
+    <div class="mapgrid" id="map"></div>
+  </details>
+  <footer class="foot">Flags are automatic and can be wrong. Use the graphs to confirm what really happened before changing a tune.</footer>
+</div>
+<script>
+const Core = (() => {
+  const FIELDS = [
+    { key: 'time', label: 'Time', re: [/^time|timestamp|elapsed|^sec/] },
+    { key: 'rpm', label: 'Engine RPM', re: [/\brpm\b|engine speed/] },
+    { key: 'load', label: 'Engine load', re: [/load/] },
+    { key: 'maf', label: 'MAF (voltage or g/s)', re: [/maf|mass air/] },
+    { key: 'stft', label: 'Short-term fuel trim', re: [/stft|short.?term|\bst.?ft|short trim/] },
+    { key: 'ltft', label: 'Long-term fuel trim', re: [/ltft|long.?term|\blt.?ft|long trim/] },
+    { key: 'knock', label: 'Knock retard', re: [/knock|\bkr\b|ign\w*.*corr|timing.*corr|spark.*corr/] },
+    { key: 'timing', label: 'Ignition timing', re: [/timing|ign\w*.*adv|spark adv|ignition/], not: /corr|knock/ },
+    { key: 'afrTarget', label: 'Target AFR', re: [/(target|command|desired|cmd).*(afr|lambda|air.?fuel|equiv)|(afr|lambda|air.?fuel).*(target|command|desired)/] },
+    { key: 'afr', label: 'Air/fuel ratio (wideband)', re: [/wideband|\bwb\b|afr|air.?fuel|lambda|equiv/], not: /target|command|desired|cmd/ },
+    { key: 'iat', label: 'Intake air temp', re: [/\biat\b|intake air temp|intake temp|air temp/] },
+    { key: 'ect', label: 'Coolant temp', re: [/\bect\b|coolant|engine temp|water temp/] },
+    { key: 'tps', label: 'Throttle position', re: [/tps|throttle|pedal|accel/] },
+    { key: 'speed', label: 'Vehicle speed', re: [/vehicle speed|\bvss\b|\bspeed\b|\bmph\b|km\/h/], not: /engine/ },
+    { key: 'misfire', label: 'Misfire count', re: [/misfire|mis-fire/] },
+  ];
+
+  // ---------- small math helpers ----------
+  const clean = a => a ? a.filter(v => v != null && isFinite(v)) : [];
+  const mean = a => { const c = clean(a); return c.length ? c.reduce((s, v) => s + v, 0) / c.length : NaN; };
+  const pct = (a, p) => { const c = clean(a).sort((x, y) => x - y); if (!c.length) return NaN; const i = Math.min(c.length - 1, Math.max(0, Math.round((c.length - 1) * p))); return c[i]; };
+  const median = a => pct(a, 0.5);
+  const std = a => { const c = clean(a), m = mean(c); return c.length ? Math.sqrt(c.reduce((s, v) => s + (v - m) ** 2, 0) / c.length) : NaN; };
+  const maxOf = a => { let m = -Infinity; for (const v of a) if (v != null && v > m) m = v; return m; };
+  const minOf = a => { let m = Infinity; for (const v of a) if (v != null && v < m) m = v; return m; };
+  const pick = (a, idx) => idx.map(i => a[i]);
+  const toF = c => c * 9 / 5 + 32;
+  const fmtT = c => `${Math.round(toF(c))}°F (${Math.round(c)}°C)`;
+  const fmtDT = c => `${Math.round(c * 9 / 5)}°F (${Math.round(c)}°C)`;
+  const sgn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1);
+  const rnd = (v, s) => Math.round(v / s) * s;
+
+  // ---------- CSV ----------
+  function parseCSV(text) {
+    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim().length);
+    if (lines.length < 3) throw new Error('The file has fewer than 3 lines, so there is no log data to read.');
+    const probe = lines[Math.min(8, lines.length - 1)];
+    const delim = [',', ';', '\t'].map(d => [d, probe.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+    const split = l => { const out = []; let cur = '', q = false; for (const ch of l) { if (ch === '"') q = !q; else if (ch === delim && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(s => s.trim()); };
+    const rows = lines.map(split);
+    const isNum = c => c !== '' && !isNaN(+c);
+    let h = -1;
+    for (let i = 0; i < Math.min(rows.length - 1, 60); i++) {
+      const r = rows[i], nx = rows[i + 1];
+      const nonNum = r.filter(c => c !== '' && !isNum(c)).length;
+      const num = nx.filter(isNum).length;
+      if (r.length >= 3 && nonNum >= r.length * 0.6 && num >= nx.length * 0.6) { h = i; break; }
+    }
+    if (h < 0) throw new Error('Could not find a header row with column names followed by numbers. Export the log as CSV with column headers.');
+    const headers = rows[h].map((s, i) => s || `Column ${i + 1}`);
+    const cols = headers.map(() => []);
+    for (let i = h + 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.length < headers.length * 0.8) continue;
+      if (r.filter(isNum).length < headers.length * 0.5) continue;
+      headers.forEach((_, j) => { const v = parseFloat(r[j]); cols[j].push(isFinite(v) ? v : null); });
+    }
+    if (cols[0].length < 20) throw new Error('Found fewer than 20 rows of data. Log at least a minute of driving.');
+    return { headers, cols, n: cols[0].length };
+  }
+
+  function detect(headers) {
+    const norm = headers.map(h => h.toLowerCase());
+    const used = new Set(), map = {};
+    for (const f of FIELDS) {
+      let c = [];
+      norm.forEach((h, i) => { if (used.has(i)) return; if (f.not && f.not.test(h)) return; if (f.re.some(r => r.test(h))) c.push(i); });
+      if (f.key === 'maf') { const v = c.find(i => /volt|\(v\)|\bv\b/.test(norm[i])); if (v != null) c = [v, ...c.filter(i => i !== v)]; }
+      if (c.length) { map[f.key] = c[0]; used.add(c[0]); }
+    }
+    return map;
+  }
+
+  function build(parsed, map) {
+    const n = parsed.n, H = k => parsed.headers[map[k]].toLowerCase();
+    const get = k => map[k] != null ? parsed.cols[map[k]].slice() : null;
+    const d = { n, units: {} };
+    let t = get('time');
+    if (t && clean(t).length < n * 0.9) t = null;
+    if (t) {
+      const diffs = []; for (let i = 1; i < Math.min(n, 400); i++) if (t[i] != null && t[i - 1] != null) diffs.push(t[i] - t[i - 1]);
+      if (median(diffs) > 5) t = t.map(v => v == null ? null : v / 1000);
+      const t0 = t.find(v => v != null); t = t.map(v => v == null ? null : v - t0); d.timeReal = true;
+    } else { t = Array.from({ length: n }, (_, i) => i / 10); d.timeReal = false; }
+    d.t = t;
+    for (const f of FIELDS) if (f.key !== 'time') d[f.key] = get(f.key);
+    for (const k of ['iat', 'ect']) if (d[k]) {
+      const h = H(k), med = median(d[k]);
+      let isF;
+      if (/°f|\(f\)|\bdeg ?f\b|fahrenheit|\bf\)?$/.test(h)) isF = true;
+      else if (/°c|\(c\)|\bdeg ?c\b|celsius|\bc\)?$/.test(h)) isF = false;
+      else isF = k === 'ect' ? med > 125 : med > 75;
+      if (isF) d[k] = d[k].map(v => v == null ? null : (v - 32) * 5 / 9);
+      d.units[k] = isF ? '°F' : '°C';
+    }
+    for (const k of ['afr', 'afrTarget']) if (d[k] && median(d[k]) < 3) { d[k] = d[k].map(v => v == null ? null : v * 14.7); d.units.lambda = true; }
+    for (const k of ['stft', 'ltft', 'load', 'tps']) if (d[k] && maxOf(d[k].map(v => v == null ? null : Math.abs(v))) <= 1.5) d[k] = d[k].map(v => v == null ? null : v * 100);
+    if (d.knock) d.knock = d.knock.map(v => v == null ? null : Math.abs(v));
+    if (d.maf) d.units.mafVolt = maxOf(d.maf) <= 5.5 && /volt|\(v\)|\bv\b/.test(H('maf')) || maxOf(d.maf) <= 5.2;
+    if (d.speed) d.units.speed = /km/.test(H('speed')) ? 'km/h' : 'mph';
+    return d;
+  }
+
+  function clusters(idx, t, gap) {
+    const out = [];
+    for (const i of idx) {
+      const last = out[out.length - 1];
+      if (last && t[i] - t[last.end] <= gap) { last.end = i; last.idx.push(i); }
+      else out.push({ start: i, end: i, idx: [i] });
+    }
+    return out;
+  }
+
+  // ---------- checks ----------
+  // Full throttle = high load AND wide-open throttle (when both are logged), above 1,500 rpm,
+  // with the tune commanding a rich mixture if a target AFR is logged, held for at least 0.5 s.
+  function wotMask(d) {
+    const raw = new Array(d.n).fill(false);
+    for (let i = 0; i < d.n; i++) {
+      const L = d.load ? d.load[i] : null, P = d.tps ? d.tps[i] : null;
+      let w = d.load && d.tps ? (L >= 70 && P >= 60) : (L != null && L >= 70) || (P != null && P >= 80);
+      if (w && d.rpm && !(d.rpm[i] >= 1500)) w = false;
+      if (w && d.afrTarget && d.afrTarget[i] != null && d.afrTarget[i] > 13.6) w = false;
+      raw[i] = w;
+    }
+    const idx = []; raw.forEach((w, i) => { if (w) idx.push(i); });
+    const out = new Array(d.n).fill(false);
+    for (const c of clusters(idx, d.t, 0.3)) if (d.t[c.end] - d.t[c.start] >= 0.5) for (let i = c.start; i <= c.end; i++) if (raw[i]) out[i] = true;
+    return out;
+  }
+  const isWot = (d, i) => d.wot[i];
+
+  function knock(d) {
+    if (!d.knock) return null;
+    const idx = []; for (let i = 0; i < d.n; i++) if (d.knock[i] >= 0.5) idx.push(i);
+    if (!idx.length) return { sev: 'ok', title: 'No knock', short: d.rpm ? `Knock retard stayed at 0° all the way to ${Math.round(maxOf(d.rpm))} rpm.` : 'Knock retard stayed at 0° for the whole log.' };
+    const ev = clusters(idx, d.t, 0.6), mx = maxOf(pick(d.knock, idx));
+    const found = [`${ev.length} knock event${ev.length > 1 ? 's' : ''}. The ECU pulled up to <b>${mx.toFixed(1)}°</b> of ignition timing to protect the engine.`];
+    let where = '';
+    if (d.rpm) {
+      const r1 = rnd(pct(pick(d.rpm, idx), 0.1), 100), r2 = rnd(pct(pick(d.rpm, idx), 0.9), 100);
+      where = `${r1}–${r2} rpm`;
+      let s = `Most of it happened between <b>${where}</b>`;
+      if (d.load) { const l1 = Math.round(pct(pick(d.load, idx), 0.1)), l2 = Math.round(pct(pick(d.load, idx), 0.9)); s += ` at ${l1}–${l2}% load`; where += ` / ${l1}–${l2}% load`; }
+      found.push(s + '.');
+    }
+    if (d.iat) { const ti = mean(pick(d.iat, idx)); if (ti > 40) found.push(`Intake air was about ${fmtT(ti)} when it knocked. Hot air makes knock more likely.`); }
+    const sev = (mx >= 4 || ev.length >= 6) ? 'crit' : 'warn';
+    const chart = d.rpm && d.load
+      ? { type: 'scatter', x: d.rpm, y: d.load, hi: d.knock.map(v => v >= 0.5), xlabel: 'Engine speed (rpm)', ylabel: 'Load (%)', hiLabel: 'Knock', loLabel: 'All other samples' }
+      : { type: 'line', x: d.t, series: [{ y: d.knock, cls: 'crit', name: 'Knock retard (°)' }], ylabel: 'Retard (°)' };
+    return {
+      id: 'knock', focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
+      found,
+      why: 'Knock is fuel exploding instead of burning smoothly. The ECU protects the engine by pulling timing, which costs power. Repeated or heavy knock can damage pistons, ring lands and rod bearings.',
+      fixes: [
+        where ? `Remove 1–2° from the ignition table in the cells around ${where}, then re-log the same pull.` : 'Remove 1–2° from the ignition table where the knock happened, then re-log the same pull.',
+        'Run the octane the tune was built for. A tune made for 93 will knock on 87.',
+        'Bring intake temperatures down. Hotter air means less knock margin.',
+        'If knock only shows up as single small blips at high rpm with no pattern, it may be false knock from mechanical noise. Check for loose heat shields or exhaust touching the body.',
+      ],
+      chart,
+    };
+  }
+
+  function lean(d) {
+    if (!d.afr || !(d.load || d.tps)) return null;
+    const noPull = { sev: 'skip', title: 'Full-throttle mixture', short: 'This log has no full-throttle pull. Do a 3rd-gear pull from about 2,500 rpm to redline to test it.' };
+    const all = []; for (let i = 0; i < d.n; i++) if (d.wot[i]) all.push(i);
+    if (all.length > d.n * 0.3) return { sev: 'skip', title: 'Full-throttle mixture', short: `${Math.round(all.length / d.n * 100)}% of this log looks like full throttle, which is not realistic. The load or throttle column is probably matched wrong or uses a different scale. Check "Columns used" below.` };
+    // Ignore fuel-cut / sensor-saturated readings: a wideband above 16.5 under real full throttle would mean the engine is barely running.
+    const wot = all.filter(i => d.afr[i] != null && d.afr[i] <= 16.5);
+    if (wot.length < 5) return noPull;
+    const afrW = pick(d.afr, wot), mx = maxOf(afrW), iMax = wot[afrW.indexOf(mx)];
+    const leanIdx = wot.filter(i => d.afr[i] >= 13.2 || (d.afrTarget && d.afrTarget[i] != null && d.afr[i] - d.afrTarget[i] >= 0.6 && d.afr[i] >= 12.8));
+    const share = leanIdx.length / wot.length;
+    const pulls = clusters(all, d.t, 1);
+    const worst = pulls.find(c => iMax >= c.start && iMax <= c.end) || pulls[0];
+    // Zoom the chart to the worst pull with 5 s either side, so it is readable on long logs.
+    const tA = d.t[worst.start] - 5, tB = d.t[worst.end] + 5;
+    let a = worst.start, b = worst.end; while (a > 0 && d.t[a - 1] >= tA) a--; while (b < d.n - 1 && d.t[b + 1] <= tB) b++;
+    const sl = arr => arr.slice(a, b + 1);
+    const bands = pulls.filter(c => c.end >= a && c.start <= b).map(c => [d.t[Math.max(c.start, a)], d.t[Math.min(c.end, b)]]);
+    const chart = { type: 'line', x: sl(d.t), series: [{ y: sl(d.afr), cls: 's1', name: 'Measured AFR' }], yDomain: [10, 17], hlines: [{ y: 13.2, cls: 'crit', label: '13.2 lean limit' }], bands, ylabel: 'Air/fuel ratio', bandLabel: 'Full throttle' };
+    if (d.afrTarget) chart.series.push({ y: sl(d.afrTarget), cls: 's2', name: 'Target AFR', dash: true });
+    if (d.rpm) { chart.series.push({ y: sl(d.rpm), cls: 'warn', name: 'RPM', axis: 'r' }); chart.y2label = 'RPM'; }
+    if (!leanIdx.length) return { sev: 'ok', title: 'Full-throttle mixture is safe', short: `Richest-to-leanest at full throttle: ${minOf(afrW).toFixed(1)}–${mx.toFixed(1)} AFR.` };
+    const sev = mx >= 13.6 ? 'crit' : (leanIdx.length >= 3 ? 'warn' : 'ok');
+    if (sev === 'ok') return { sev: 'ok', title: 'Full-throttle mixture is safe', short: `Peaked at ${mx.toFixed(1)} AFR only briefly.` };
+    const leanStart = d.rpm ? rnd(minOf(pick(d.rpm, leanIdx)), 100) : null;
+    const found = [`Under full throttle the air/fuel ratio reached <b>${mx.toFixed(1)}</b>${d.rpm ? ` at ${Math.round(d.rpm[iMax])} rpm` : ''}.`];
+    if (d.afrTarget && d.afrTarget[iMax] != null) found.push(`The tune asked for ${d.afrTarget[iMax].toFixed(1)} there, so it ran ${(mx - d.afrTarget[iMax]).toFixed(1)} leaner than commanded.`);
+    found.push(`${Math.round(share * 100)}% of full-throttle time was leaner than 13.2${leanStart ? `, starting around ${leanStart} rpm` : ''}.`);
+    found.push(`Found ${pulls.length} full-throttle pull${pulls.length > 1 ? 's' : ''}. The graph zooms in on the worst one.`);
+    return {
+      id: 'lean', focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR hit ${mx.toFixed(1)} under load. Safe target is about 12.5–13.0.`,
+      found,
+      why: 'A lean mixture under load burns hotter. It raises cylinder and exhaust temperatures and makes knock much more likely. Naturally aspirated engines are usually safe around 12.5–13.0 AFR at full throttle.',
+      fixes: [
+        `Add fuel in the open-loop (WOT) fuel table${leanStart ? ` above ${leanStart} rpm` : ''} until the wideband reads about 12.6–12.8.`,
+        'If fuel trims are positive (MAF under-reading), fix MAF scaling first. Open-loop fueling depends on it and trims do not apply at full throttle.',
+        'If AFR keeps rising with rpm even after adding fuel, check fuel pressure and the fuel filter.',
+        'Rule out a false lean reading: do a free-air calibration on the wideband and check for exhaust leaks before the sensor.',
+      ],
+      chart,
+    };
+  }
+
+  function trims(d) {
+    if (!d.stft && !d.ltft) return null;
+    const tot = Array.from({ length: d.n }, (_, i) => {
+      const a = d.stft ? d.stft[i] : 0, b = d.ltft ? d.ltft[i] : 0;
+      return a == null || b == null ? null : a + b;
+    });
+    const cl = []; for (let i = 0; i < d.n; i++) {
+      if (tot[i] == null) continue;
+      if (d.rpm && d.rpm[i] < 600) continue;
+      if (isWot(d, i) || (d.tps && d.tps[i] >= 60)) continue;
+      if (d.afr && d.afr[i] != null && (d.afr[i] > 15.8 || d.afr[i] < 13.6)) continue;
+      cl.push(i);
+    }
+    if (cl.length < 30) return { sev: 'skip', title: 'Fuel trims', short: 'Not enough part-throttle driving in this log to judge trims. Log at least a few minutes of normal driving.' };
+    const overall = mean(pick(tot, cl));
+    let axis = 'maf', src = d.maf, step;
+    if (!src) { axis = 'rpm'; src = d.rpm; }
+    const rows = [];
+    if (src) {
+      const lo = pct(pick(src, cl), 0.01), hi = pct(pick(src, cl), 0.99);
+      step = axis === 'maf' ? (d.units.mafVolt ? 0.2 : Math.max(1, rnd((hi - lo) / 10, 1))) : 500;
+      const bins = new Map();
+      for (const i of cl) { const v = src[i]; if (v == null) continue; const b = Math.floor(v / step) * step; if (!bins.has(b)) bins.set(b, []); bins.get(b).push(tot[i]); }
+      [...bins.keys()].sort((a, b) => a - b).forEach(b => { const a = bins.get(b); if (a.length >= 15) rows.push({ b, n: a.length, m: mean(a) }); });
+    }
+    const worst = rows.length ? rows.reduce((w, r) => Math.abs(r.m) > Math.abs(w.m) ? r : w) : null;
+    const worstVal = worst ? worst.m : overall;
+    const unit = axis === 'maf' ? (d.units.mafVolt ? 'V' : ' g/s') : ' rpm';
+    const dec = axis === 'maf' && d.units.mafVolt ? 1 : 0;
+    const lab = r => `${r.b.toFixed(dec)}–${(r.b + step).toFixed(dec)}${unit}`;
+    let sev = 'ok';
+    if (Math.abs(worstVal) >= 10 || Math.abs(overall) >= 10) sev = 'crit';
+    else if (Math.abs(worstVal) >= 5 || Math.abs(overall) >= 5) sev = 'warn';
+    if (sev === 'ok') return { sev: 'ok', title: 'Fuel trims look healthy', short: `Average total trim ${sgn(overall)}%, every area within ±5%.` };
+    const pos = worstVal > 0;
+    const found = [`Average total fuel trim (short + long term): <b>${sgn(overall)}%</b>.`];
+    if (worst) found.push(`Worst area: <b>${lab(worst)}</b> ${axis === 'maf' ? 'MAF' : ''} at ${sgn(worst.m)}%. The ECU is ${pos ? 'adding' : 'removing'} that much fuel to fix the mixture.`);
+    found.push(pos ? 'Positive trims mean the engine runs lean before correction. Usually the MAF is under-reading airflow in that range, or there is a vacuum leak.' : 'Negative trims mean the engine runs rich before correction. Usually the MAF is over-reading airflow in that range, or injector data is off.');
+    const res = {
+      id: 'trims', sev, title: `Fuel trims ${pos ? 'positive (lean)' : 'negative (rich)'}`, short: `ECU is correcting fuel by ${sgn(worstVal)}%${worst ? ` at ${lab(worst)}` : ''}. Normal is within ±5%.`,
+      found,
+      why: 'Fuel trims are the ECU fixing your fuel map in real time. Small trims are normal. Large ones mean the base calibration is off, which hurts fuel economy and throttle response. At full throttle the ECU stops correcting, so the same error goes uncorrected right when it matters most.',
+      fixes: axis === 'maf' ? [
+        'Rescale the MAF calibration with the table below: multiply the airflow value at each voltage breakpoint by the suggested change.',
+        'If trims are only high at idle and low airflow, smoke-test for vacuum leaks before changing the MAF table.',
+        'After flashing, reset fuel trims, drive 20 minutes of mixed roads, and re-log. Repeat until every area is within ±3%.',
+      ] : [
+        'Log MAF voltage too. It lets this tool give you a correction for each MAF breakpoint.',
+        'If trims are only high at idle, smoke-test for vacuum leaks.',
+        'After any change, reset fuel trims and re-log a 20-minute mixed drive.',
+      ],
+      chart: { type: 'bar', labels: rows.map(r => r.b.toFixed(dec)), values: rows.map(r => r.m), band: 5, ylabel: 'Total trim (%)', xlabel: axis === 'maf' ? `MAF (${unit.trim()}) bin start` : 'RPM bin start' },
+    };
+    if (axis === 'maf' && rows.length) res.table = { head: ['MAF range', 'Samples', 'Avg trim', 'Suggested change'], rows: rows.map(r => [lab(r), r.n, `${sgn(r.m)}%`, Math.abs(r.m) < 2 ? 'Leave as is' : `${sgn(r.m)}% airflow`]) };
+    return res;
+  }
+
+  function cruise(d) {
+    if (!d.afr || !d.rpm) return null;
+    const idx = []; for (let i = 0; i < d.n; i++) {
+      const a = d.afr[i]; if (a == null || a > 16.5 || a < 10) continue;
+      if (d.rpm[i] < 1500 || d.rpm[i] > 3800 || isWot(d, i)) continue;
+      if (d.load && (d.load[i] < 15 || d.load[i] > 60)) continue;
+      if (d.tps && (d.tps[i] < 3 || d.tps[i] > 40)) continue;
+      idx.push(i);
+    }
+    if (idx.length < 50) return null;
+    const m = median(pick(d.afr, idx));
+    if (m >= 14.1) return { sev: 'ok', title: 'Cruise mixture on target', short: `Median AFR while cruising: ${m.toFixed(1)}. That is right where it should be for economy.` };
+    return {
+      id: 'cruise', sev: 'warn', title: 'Rich while cruising', short: `Median cruise AFR is ${m.toFixed(1)}. Should be about 14.7.`,
+      found: [`While cruising (1,500–3,800 rpm, part throttle), the median air/fuel ratio was <b>${m.toFixed(1)}</b>.`, `That burns roughly ${Math.round((14.7 / m - 1) * 100)}% more fuel than a 14.7 mixture for the same air.`],
+      why: 'At steady cruise a gasoline engine should sit near 14.7 (stoichiometric). Running richer than that wastes fuel and can foul plugs. It usually means the ECU is in open loop, the coolant is not fully warm, or the open-loop fuel table reaches into cruise areas.',
+      fixes: ['Check that the engine was fully warm. A cold engine adds fuel on purpose.', 'Look at the open-loop / closed-loop switch thresholds in the tune. If cruise load triggers open loop, raise the threshold.', 'Make sure the upstream O2 sensor is working, so the ECU can stay in closed loop.'],
+      chart: { type: 'line', x: d.t, series: [{ y: d.afr, cls: 's1', name: 'Measured AFR' }], yDomain: [10, 17], hlines: [{ y: 14.7, cls: 'ok', label: '14.7 stoich' }], ylabel: 'Air/fuel ratio' },
+    };
+  }
+
+  function iat(d) {
+    if (!d.iat) return null;
+    const mx = maxOf(d.iat), p5 = pct(d.iat, 0.05), delta = mx - p5;
+    let sev = 'ok';
+    if (mx >= 65) sev = 'crit'; else if (mx >= 55 || delta >= 22) sev = 'warn';
+    if (sev === 'ok') return { sev: 'ok', title: 'Intake temperature normal', short: `Peaked at ${fmtT(mx)}, ${fmtDT(delta)} above the coolest reading.` };
+    const hot = []; for (let i = 0; i < d.n; i++) if (d.iat[i] != null && d.iat[i] >= mx - 4) hot.push(i);
+    const idleHot = hot.filter(i => (d.speed ? d.speed[i] < 3 : d.rpm ? d.rpm[i] < 1100 : false)).length / hot.length > 0.5;
+    const found = [`Intake air peaked at <b>${fmtT(mx)}</b>.`, `That is ${fmtDT(delta)} above the coolest reading in this log, ${fmtT(p5)}, which is close to the outside air temperature.`];
+    if (idleHot) found.push('The hottest readings came while stopped or idling. That is heat soak: with no airflow, the engine bay cooks the intake.');
+    const chart = { type: 'line', x: d.t, series: [{ y: d.iat.map(v => v == null ? null : toF(v)), cls: 'warn', name: 'Intake air (°F)' }], hlines: [{ y: toF(55), cls: 'crit', label: '131°F' }], ylabel: 'Intake air (°F)' };
+    if (d.speed) { chart.series.push({ y: d.speed, cls: 's2', name: `Speed (${d.units.speed})`, axis: 'r' }); chart.y2label = `Speed (${d.units.speed})`; }
+    return {
+      id: 'iat', sev, title: idleHot ? 'Intake heat soak' : 'Hot intake air', short: `Intake air reached ${fmtT(mx)}${idleHot ? ', mostly while stopped' : ''}.`,
+      found,
+      why: 'Hot intake air is less dense, so each cylinder gets less oxygen and makes less power. The ECU also pulls timing on hot air to avoid knock. A common rule of thumb is about 1% power lost for every 10°F of extra intake temperature.',
+      fixes: [
+        'Shield or insulate the heat sources near the intake, especially the exhaust manifold or header.',
+        'Seal the airbox or filter so it breathes outside air instead of engine-bay air.',
+        'Use an insulated intake tube, or wrap metal intake piping.',
+        'Compare logs before and after a fix on the same route at a similar outside temperature.',
+      ],
+      chart,
+    };
+  }
+
+  function ect(d) {
+    if (!d.ect) return null;
+    const tEnd = d.t[d.n - 1];
+    const warm = []; for (let i = 0; i < d.n; i++) if (d.ect[i] != null && d.t[i] >= Math.min(180, tEnd / 2)) warm.push(i);
+    const mx = maxOf(d.ect), wm = median(pick(d.ect, warm));
+    const chart = { type: 'line', x: d.t, series: [{ y: d.ect.map(v => v == null ? null : toF(v)), cls: 's1', name: 'Coolant (°F)' }], hlines: [{ y: toF(103), cls: 'crit', label: '217°F' }, { y: toF(80), cls: 'warn', label: '176°F' }], ylabel: 'Coolant (°F)' };
+    if (mx >= 103) return {
+      id: 'ect', sev: mx >= 108 ? 'crit' : 'warn', title: 'Engine running hot', short: `Coolant reached ${fmtT(mx)}.`,
+      found: [`Coolant temperature peaked at <b>${fmtT(mx)}</b>. A healthy engine usually sits between 190 and 205°F (88–96°C).`],
+      why: 'When the engine runs hot, the ECU pulls timing and adds fuel to protect itself, so you lose power and economy. Sustained overheating can warp the cylinder head or blow the head gasket.',
+      fixes: ['Check coolant level and burp air out of the system.', 'Confirm the radiator fan turns on at the right temperature.', 'Inspect the radiator for blockage and the water pump for leaks or noise.'],
+      chart,
+    };
+    if (warm.length > 50 && wm < 80) return {
+      id: 'ect', sev: 'warn', title: 'Engine not reaching temperature', short: `Coolant stayed around ${fmtT(wm)} after warm-up.`,
+      found: [`After the first few minutes, coolant sat around <b>${fmtT(wm)}</b>. A warm engine normally sits between 190 and 205°F (88–96°C).`],
+      why: 'A cold engine runs rich on purpose (warm-up enrichment) and burns noticeably more fuel. A thermostat stuck open is a common cause of a sudden drop in mpg.',
+      fixes: ['Replace the thermostat if the engine takes a long time to warm up or cools down on the highway.', 'Compare the logged coolant reading with a separate gauge to rule out a bad sensor.', 'Start the log after the engine is fully warm so the other checks are accurate.'],
+      chart,
+    };
+    return { sev: 'ok', title: 'Coolant temperature normal', short: `Warm engine sat around ${fmtT(wm)}, peak ${fmtT(mx)}.` };
+  }
+
+  function idle(d) {
+    if (!d.rpm) return null;
+    // Candidate idle samples: throttle closed, car stopped, engine warm.
+    const cand = []; for (let i = 0; i < d.n; i++) {
+      if (d.rpm[i] == null || d.rpm[i] > 1300 || d.rpm[i] < 300) continue;
+      if (d.tps && d.tps[i] > 2) continue;
+      if (d.speed && d.speed[i] > 2) continue;
+      if (d.ect && d.ect[i] != null && d.ect[i] < 70) continue; // cold-start fast idle is normal
+      cand.push(i);
+    }
+    const mis = d.misfire ? maxOf(d.misfire) - minOf(d.misfire) : 0;
+    // Split into idle periods. The first 4 s of each is the engine settling down from driving
+    // (return-to-idle), which is judged separately from steady idle.
+    const periods = clusters(cand, d.t, 0.5);
+    const steady = [], undershoots = [];
+    let med0 = median(pick(d.rpm, cand));
+    for (const p of periods) {
+      const t0 = d.t[p.start];
+      const settle = p.idx.filter(i => d.t[i] - t0 < 4), rest = p.idx.filter(i => d.t[i] - t0 >= 4);
+      rest.forEach(i => steady.push(i));
+      if (settle.length) undershoots.push(minOf(pick(d.rpm, settle)));
+    }
+    // Without a coolant channel, drop clearly elevated fast-idle samples.
+    const st = d.ect ? steady : steady.filter(i => d.rpm[i] <= med0 + 200);
+    if (st.length < 50 && !mis) return null;
+    const r = pick(d.rpm, st), med = median(r);
+    const spread = (pct(r, 0.95) - pct(r, 0.05)) / 2; // robust: ignores a single glitch sample
+    const dips = clusters(st.filter(i => d.rpm[i] < med - 150), d.t, 0.5).length;
+    const bigUnder = undershoots.filter(v => v < med - 200);
+    const worstUnder = bigUnder.length ? minOf(bigUnder) : null;
+    const bad = spread >= 60 || dips >= 3 || mis > 0;
+    // A calibration problem repeats on most stops; one odd stop is usually driver input (clutch, pulling away) or a glitch.
+    const underRepeats = bigUnder.length >= 3 && bigUnder.length / Math.max(1, undershoots.length) >= 0.15;
+    const underNote = worstUnder != null ? ` ${bigUnder.length} of ${undershoots.length} stops dipped more than 200 rpm (lowest ${Math.round(worstUnder)}), too few to point at the tune.` : '';
+    if (!bad && !underRepeats) return { sev: 'ok', title: 'Idle is steady', short: `Warm idle ${Math.round(med)} rpm, varying ±${Math.round(spread)} rpm.${underNote}` };
+    const chart = { type: 'line', x: d.t, series: [{ y: d.rpm, cls: 's1', name: 'Engine RPM' }], yDomain: [Math.max(0, rnd(med - 500, 100)), rnd(med + 500, 100)], hlines: [{ y: med - 150, cls: 'warn', label: '−150 rpm' }], ylabel: 'RPM' };
+    if (!bad) return {
+      id: 'idle', sev: 'warn', title: 'Big dip when returning to idle', short: `RPM drops to ${Math.round(worstUnder)} before settling at ${Math.round(med)}. Stall risk.`,
+      found: [`Steady warm idle is fine: ${Math.round(med)} rpm, varying ±${Math.round(spread)} rpm.`, `When you come to a stop, RPM undershoots to <b>${Math.round(worstUnder)} rpm</b> before recovering. ${bigUnder.length} of ${undershoots.length} stops dipped more than 200 rpm.`],
+      why: 'When you lift off and the clutch goes in, the ECU has to catch the falling RPM with extra idle air. If it catches too late, RPM dips hard and the engine can stall. This is an idle-control calibration issue, not a misfire.',
+      fixes: ['Increase the throttle follower or dashpot (return-to-idle airflow) in the tune so RPM drops more gently.', 'If you rescaled the MAF at low airflow, re-check idle airflow and idle fuel trims.', 'Clean the throttle body, since carbon buildup reduces the air the ECU can let in at idle.'],
+      chart,
+    };
+    const found = [`Warm idle averaged <b>${Math.round(med)} rpm</b> and varied by ±${Math.round(spread)} rpm while stopped. Under ±30 is typical for a healthy engine.`];
+    if (dips) found.push(`${dips} dip${dips > 1 ? 's' : ''} of more than 150 rpm during steady idle.`);
+    if (mis) found.push(`The ECU counted <b>${Math.round(mis)} misfire${mis > 1 ? 's' : ''}</b> during the log.`);
+    return {
+      id: 'idle', sev: mis > 20 ? 'crit' : 'warn', title: mis ? 'Misfires detected' : 'Rough idle', short: mis ? `${Math.round(mis)} misfires counted.` : `Warm idle varies by ±${Math.round(spread)} rpm${dips ? ` with ${dips} dips` : ''}.`,
+      found,
+      why: 'A smooth idle is a quick engine health check. Dips and hunting while stopped usually mean a misfire, a vacuum leak, or an idle airflow problem.',
+      fixes: ['Check spark plugs, coils and their connectors. A loose connector can cause a misfire that comes and goes.', 'Smoke-test for vacuum leaks, especially after intake work.', 'Clean the throttle body. If you changed the intake or MAF scaling, re-check the idle airflow tables.'],
+      chart,
+    };
+  }
+
+  const WANT = [
+    ['knock', 'Knock retard', 'knock'],
+    ['afr', 'Wideband AFR', 'lean mixture and cruise economy'],
+    ['stft', 'Fuel trims (short and long term)', 'MAF scaling and vacuum leaks'],
+    ['maf', 'MAF voltage', 'per-breakpoint MAF corrections'],
+    ['load', 'Engine load or throttle', 'full-throttle detection'],
+    ['iat', 'Intake air temperature', 'heat soak'],
+    ['ect', 'Coolant temperature', 'overheating and thermostat problems'],
+    ['rpm', 'Engine RPM', 'idle quality and where problems happen'],
+  ];
+
+  function analyze(d) {
+    d.wot = wotMask(d);
+    const res = [knock, lean, trims, cruise, iat, ect, idle].map(f => f(d)).filter(Boolean);
+    const order = { crit: 0, warn: 1, ok: 2, skip: 3 };
+    const issues = res.filter(r => r.sev === 'crit' || r.sev === 'warn').sort((a, b) => order[a.sev] - order[b.sev]);
+    const FOCUS = {
+      knock: { chans: ['rpm', 'load', 'knock', 'timing', 'iat'], rel: ['rpm', 'load', 'knock'] },
+      lean: { chans: ['afr', 'afrTarget', 'rpm', 'tps', 'load'], rel: ['rpm', 'afr', 'tps'] },
+      trims: { chans: ['stft', 'ltft', 'maf', 'afr', 'rpm'], rel: ['maf', 'ltft', 'stft'] },
+      cruise: { chans: ['afr', 'rpm', 'load', 'tps', 'ect'], rel: ['load', 'afr', 'rpm'] },
+      iat: { chans: ['iat', 'speed', 'rpm', 'ect'], rel: ['speed', 'iat', 'rpm'] },
+      ect: { chans: ['ect', 'iat', 'speed', 'rpm'], rel: ['speed', 'ect', 'iat'] },
+      idle: { chans: ['rpm', 'tps', 'speed', 'ect', 'maf'], rel: ['ect', 'rpm', 'speed'] },
+    };
+    issues.forEach(i => Object.assign(i, FOCUS[i.id] || {}));
+    const passed = res.filter(r => r.sev === 'ok');
+    const skipped = res.filter(r => r.sev === 'skip');
+    const missing = WANT.filter(([k]) => k === 'stft' ? !d.stft && !d.ltft : k === 'load' ? !d.load && !d.tps : !d[k]).map(([, l, why]) => ({ label: l, why }));
+    return { issues, passed, skipped, missing };
+  }
+
+  // ---------- example log ----------
+  function sample() {
+    let s = 7; const r = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    const g = () => (r() + r() + r() + r() - 2) * 0.87;
+    const H = ['Time (s)', 'Engine Speed (rpm)', 'Calculated Load (%)', 'MAF Voltage (V)', 'Short Term Fuel Trim (%)', 'Long Term Fuel Trim (%)', 'Knock Retard (deg)', 'Ignition Advance (deg)', 'Wideband AFR', 'Target AFR', 'Intake Air Temp (F)', 'Coolant Temp (F)', 'Throttle Position (%)', 'Vehicle Speed (mph)'];
+    const cols = H.map(() => []);
+    let rpm = 800, speed = 0, iatF = 92, ect = 191;
+    const hz = 10, T = 300;
+    for (let i = 0; i < T * hz; i++) {
+      const t = i / hz;
+      const p1 = t >= 150 && t < 158, p2 = t >= 240 && t < 247;
+      const pull = p1 ? (t - 150) / 8 : p2 ? (t - 240) / 7 : -1;
+      let tps, load, afrT = 14.7, afr, kn = 0, mode;
+      if (t < 60 || t >= 262) {
+        mode = 'idle'; tps = 0; speed = Math.max(0, speed - 1.5); rpm = 800 + g() * 22; load = 21 + g();
+        iatF += t < 60 ? 0.06 : 0.12; ect += (198 - ect) * 0.004;
+      } else if (pull >= 0) {
+        mode = 'wot'; tps = 100; rpm = 2600 + pull * 4200 + g() * 15; load = 88 + 4 * Math.sin(pull * 3) + g(); speed = (p1 ? 30 : 34) + pull * 45; afrT = 12.5;
+        iatF += (86 - iatF) * 0.01;
+      } else if ((t >= 158 && t < 168) || (t >= 247 && t < 262)) {
+        mode = 'decel'; tps = 0; rpm = Math.max(t >= 247 ? 900 : 1600, rpm - 45); load = 13 + g(); speed = Math.max(t >= 247 ? 0 : 38, speed - (t >= 247 ? 0.55 : 0.25));
+        iatF += (86 - iatF) * 0.005;
+      } else {
+        mode = 'cruise'; tps = 15 + 6 * Math.sin(t / 9) + g(); const tg = t < 150 ? 52 : 47; speed += (tg - speed) * 0.02; rpm = Math.max(1500, speed * 46 + g() * 25); load = 30 + tps * 0.9 + g() * 1.5;
+        iatF += (86 - iatF) * 0.004; ect += (192 - ect) * 0.01;
+      }
+      const flow = Math.min(1, rpm * load / (7000 * 95));
+      const maf = 0.85 + 3.6 * Math.sqrt(flow) + g() * 0.02;
+      let stft = 0, ltft = 0;
+      const midBand = maf >= 1.9 && maf <= 2.7;
+      if (mode === 'idle' || mode === 'cruise') { ltft = midBand ? 6.3 : 0.8; stft = g() * 1.6 + (midBand ? 3.4 : 0); afr = 14.7 + g() * 0.15; }
+      else if (mode === 'decel') { ltft = midBand ? 6.3 : 0.8; afr = 18 + r() * 3; }
+      else { ltft = 0.8; afr = 12.55 + (rpm > 5700 ? (rpm - 5700) / 1000 * 1.25 : 0.05) + g() * 0.06; }
+      if (mode === 'wot' && rpm > 4100 && rpm < 5300 && r() < (p1 ? 0.4 : 0.25)) kn = rnd((p1 ? 1.4 : 0.7) + r() * 2.1, 0.35);
+      const timing = mode === 'idle' ? 10 + g() : mode === 'cruise' ? 31 + g() : mode === 'decel' ? 18 : 15 + rpm / 1000 * 2 - kn;
+      const vals = [t, rpm, load, maf, stft, ltft, kn, timing, afr, afrT, iatF, ect + g() * 0.6, Math.max(0, tps), speed];
+      vals.forEach((v, j) => cols[j].push(Math.round(v * 100) / 100));
+    }
+    return { headers: H, cols, n: cols[0].length };
+  }
+
+  return { FIELDS, parseCSV, detect, build, analyze, sample, toF, mean, maxOf };
+})();
+if (typeof module !== 'undefined') module.exports = Core;
+
+(() => {
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const DPR = () => Math.min(2, window.devicePixelRatio || 1);
+  const PAL = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6'];
+
+  let P, map, D, AN, src = { example: true };
+  let T = [], meta = [], sel = [], view = { i0: 0, i1: 0 }, cur = null, bands = { knock: [], wot: [] };
+  let rel = { x: null, y: null, c: null };
+
+  // ---------- helpers ----------
+  function nice(lo, hi, n) {
+    if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw)), f = raw / mag;
+    const step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+    const a = Math.floor(lo / step) * step, b = Math.ceil(hi / step) * step, ticks = [];
+    for (let v = a; v <= b + step * 1e-6; v += step) ticks.push(+v.toFixed(10));
+    return { ticks, lo: a, hi: b, step };
+  }
+  const fmt = v => {
+    if (v == null || !isFinite(v)) return '—';
+    const a = Math.abs(v);
+    return a >= 1000 ? Math.round(v).toLocaleString('en-US') : a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
+  };
+  const ft = (v, step) => step >= 1 ? Math.round(v).toLocaleString('en-US') : v.toFixed(step >= 0.1 ? 1 : 2);
+  function splitName(h) { const m = /^(.*?)\s*[\(\[]([^\)\]]*)[\)\]]\s*$/.exec(h); return m ? { name: m[1] || h, unit: m[2] } : { name: h, unit: '' }; }
+  function idxAt(t) { let lo = 0, hi = T.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (T[m] < t) lo = m + 1; else hi = m; } return lo; }
+  function hex(c) { const m = /^#?([0-9a-f]{6})$/i.exec(c); if (!m) return [128, 128, 128]; const n = parseInt(m[1], 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+  function grad(f, stops) { f = Math.max(0, Math.min(1, f)); const s = f < .5 ? 0 : 1, g = f < .5 ? f * 2 : (f - .5) * 2; const a = stops[s], b = stops[s + 1]; return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * g)).join(',')})`; }
+  function sizeCanvas(cv) { const w = cv.clientWidth, h = cv.clientHeight, r = DPR(); if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)) { cv.width = Math.round(w * r); cv.height = Math.round(h * r); } const ctx = cv.getContext('2d'); ctx.setTransform(r, 0, 0, r, 0, 0); ctx.clearRect(0, 0, w, h); return { ctx, w, h }; }
+  function rangesFromMask(mask) { const out = []; let s = -1; for (let i = 0; i <= mask.length; i++) { if (i < mask.length && mask[i]) { if (s < 0) s = i; } else if (s >= 0) { out.push([s, i - 1]); s = -1; } } return out; }
+  function corr(a, b, i0, i1) {
+    const step = Math.max(1, Math.floor((i1 - i0 + 1) / 5000));
+    let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    for (let i = i0; i <= i1; i += step) { const x = a[i], y = b[i]; if (x == null || y == null) continue; n++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; }
+    if (n < 10) return null;
+    const vx = sxx - sx * sx / n, vy = syy - sy * sy / n; if (vx <= 1e-12 || vy <= 1e-12) return null;
+    return (sxy - sx * sy / n) / Math.sqrt(vx * vy);
+  }
+  const strength = r => { const a = Math.abs(r); return a < .2 ? 'barely related' : a < .5 ? (r > 0 ? 'loosely move together' : 'loosely move opposite') : (r > 0 ? 'strongly move together' : 'strongly move opposite'); };
+  const colOf = k => map[k] != null ? map[k] : null;
+
+  // ---------- load ----------
+  function load(parsed, source) {
+    P = parsed; src = source; map = Core.detect(P.headers);
+    meta = P.headers.map((h, j) => {
+      const col = P.cols[j]; let lo = Infinity, hi = -Infinity, n = 0;
+      for (const v of col) if (v != null) { n++; if (v < lo) lo = v; if (v > hi) hi = v; }
+      return { j, ...splitName(h), header: h, numeric: n >= P.n * 0.5, lo, hi, flat: !(hi > lo) };
+    });
+    analyze();
+    const order = ['rpm', 'load', 'tps', 'speed', 'maf', 'afr', 'afrTarget', 'stft', 'ltft', 'timing', 'knock', 'iat', 'ect', 'misfire'];
+    sel = order.map(colOf).filter(j => j != null && meta[j].numeric);
+    if (sel.length < 3) sel = channels().filter(j => !meta[j].flat).slice(0, 6);
+    view = { i0: 0, i1: P.n - 1 }; cur = null;
+    const has = k => colOf(k) != null;
+    rel = has('rpm') && has('load') ? { x: colOf('rpm'), y: colOf('load'), c: has('knock') ? colOf('knock') : has('afr') ? colOf('afr') : null } : { x: sel[0] ?? null, y: sel[1] ?? sel[0] ?? null, c: null };
+    renderAll();
+  }
+  function analyze() {
+    D = Core.build(P, map); AN = Core.analyze(D);
+    T = new Array(P.n); for (let i = 0; i < P.n; i++) T[i] = D.t[i] != null ? D.t[i] : (i ? T[i - 1] + 0.1 : 0);
+    bands.knock = D.knock ? rangesFromMask(D.knock.map(v => v != null && v >= 0.5)) : [];
+    bands.wot = rangesFromMask(D.wot || []);
+  }
+  const channels = () => meta.filter(m => m.numeric && m.j !== map.time).map(m => m.j);
+
+  // ---------- render: source + notes ----------
+  function renderSource() {
+    $('#source').innerHTML = src.example
+      ? `<span class="badge">Example log</span><span><b>NC Miata, 5-minute drive</b> with idle, cruise and two full-throttle pulls. Load your own CSV to explore your car.</span>`
+      : `<span class="badge">Your log</span><span><b>${esc(src.name)}</b> · ${P.n.toLocaleString('en-US')} rows · ${channels().length} channels</span><button class="linkbtn" id="ex" type="button">Show the example log</button>`;
+    const ex = $('#ex'); if (ex) ex.onclick = () => load(Core.sample(), { example: true });
+  }
+  function renderNotes() {
+    const is = AN.issues, ok = AN.passed;
+    $('#notes').innerHTML = `
+      <div class="notes-head"><h2>${is.length ? `${is.length} thing${is.length > 1 ? 's' : ''} worth a look` : 'Nothing stood out'}</h2><p>Automatic flags. Open one to see the graphs behind it and judge for yourself.</p></div>
+      ${is.length ? `<div class="nlist">${is.map((i, k) => `<div class="note"><span class="dot ${i.sev}"></span><strong>${esc(i.title)}</strong><p>${esc(i.short)}</p>${i.chans ? `<button type="button" data-k="${k}">Show in graphs</button>` : ''}</div>`).join('')}</div>` : ''}
+      ${ok.length ? `<p class="okline"><span class="dot ok"></span> Looked normal: ${ok.map(o => `<b>${esc(o.title)}</b>`).join(', ')}.</p>` : ''}`;
+    document.querySelectorAll('#notes button[data-k]').forEach(b => b.onclick = () => focus(is[+b.dataset.k]));
+  }
+  function focus(issue) {
+    const cs = (issue.chans || []).map(colOf).filter(j => j != null);
+    if (cs.length) sel = cs;
+    if (issue.focusT) { const a = idxAt(Math.max(T[0], issue.focusT[0])), b = idxAt(Math.min(T[T.length - 1], issue.focusT[1])); view = { i0: a, i1: Math.max(a + 10, b) }; }
+    else view = { i0: 0, i1: P.n - 1 };
+    if (issue.rel) { const [x, y, c] = issue.rel.map(colOf); if (x != null && y != null) rel = { x, y, c: c ?? null }; }
+    cur = null; renderPicker(); buildStrips(); renderRelSelects(); drawRel();
+    $('#explorer').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ---------- picker ----------
+  function presets() {
+    const P = [
+      ['Fuel', ['rpm', 'afr', 'afrTarget', 'stft', 'ltft', 'maf']],
+      ['Ignition', ['rpm', 'load', 'timing', 'knock', 'iat']],
+      ['Temps', ['iat', 'ect', 'speed', 'rpm']],
+      ['Driving', ['rpm', 'tps', 'load', 'speed']],
+    ].map(([n, ks]) => [n, ks.map(colOf).filter(j => j != null)]).filter(([, js]) => js.length >= 2);
+    $('#presets').innerHTML = P.map(([n], k) => `<button type="button" data-p="${k}">${n}</button>`).join('') + `<button type="button" data-p="all">All</button><button type="button" data-p="none">None</button>`;
+    document.querySelectorAll('#presets button').forEach(b => b.onclick = () => {
+      const p = b.dataset.p; sel = p === 'all' ? channels().filter(j => !meta[j].flat) : p === 'none' ? [] : P[+p][1];
+      renderPicker(); buildStrips();
+    });
+  }
+  function renderPicker() {
+    const q = $('#pkSearch').value.trim().toLowerCase();
+    const list = channels().filter(j => !q || meta[j].header.toLowerCase().includes(q));
+    $('#pklist').innerHTML = list.map(j => { const m = meta[j]; return `<label class="pk${m.flat ? ' flat' : ''}" for="pk${j}"><input type="checkbox" id="pk${j}" data-j="${j}"${sel.includes(j) ? ' checked' : ''}><span title="${esc(m.header)}">${esc(m.header)}</span><small>${m.flat ? `flat at ${fmt(m.lo)}` : `${fmt(m.lo)} to ${fmt(m.hi)}`}</small></label>`; }).join('') || '<p class="okline">No columns match.</p>';
+    document.querySelectorAll('#pklist input').forEach(cb => cb.onchange = () => {
+      const j = +cb.dataset.j;
+      if (cb.checked) { if (!sel.includes(j)) sel.push(j); } else sel = sel.filter(x => x !== j);
+      buildStrips(); $('#pkCount').textContent = `${sel.length} of ${channels().length} shown`;
+    });
+    $('#pkCount').textContent = `${sel.length} of ${channels().length} shown`;
+  }
+
+  // ---------- strip charts ----------
+  let cursorEl, selEl;
+  function buildStrips() {
+    const st = $('#stack');
+    st.innerHTML = sel.length ? sel.map((j, k) => { const m = meta[j]; return `<div class="strip" data-j="${j}"><div class="sh"><i class="sw" style="background:var(${PAL[k % PAL.length]})"></i><span class="sn" title="${esc(m.header)}">${esc(m.name)}</span>${m.unit ? `<span class="su">${esc(m.unit)}</span>` : ''}<span class="sv" id="sv${j}">—</span></div><canvas aria-label="${esc(m.header)} over time"></canvas></div>`; }).join('') : '<p class="empty">Pick channels on the left to graph them.</p>';
+    cursorEl = document.createElement('div'); cursorEl.className = 'cursor'; cursorEl.hidden = true; st.appendChild(cursorEl);
+    selEl = document.createElement('div'); selEl.className = 'sel'; selEl.hidden = true; st.appendChild(selEl);
+    drawStrips();
+  }
+  function drawStrips() {
+    const i0 = view.i0, i1 = view.i1, t0 = T[i0], t1 = T[i1], span = (t1 - t0) || 1;
+    const grid = css('--grid'), muted = css('--muted'), bk = css('--band-knock'), bw = css('--band-wot'), mono = css('--f-mono') || 'monospace';
+    const X = nice(t0, t1, 7);
+    const showK = $('#mKnock').checked, showW = $('#mWot').checked;
+    document.querySelectorAll('#stack .strip').forEach((el, k) => {
+      const j = +el.dataset.j, col = P.cols[j], cv = el.querySelector('canvas');
+      const { ctx, w, h } = sizeCanvas(cv), xs = t => (t - t0) / span * w;
+      let lo = Infinity, hi = -Infinity;
+      for (let i = i0; i <= i1; i++) { const v = col[i]; if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+      if (!isFinite(lo)) { lo = 0; hi = 1; } if (lo === hi) { lo -= 1; hi += 1; }
+      const pad = (hi - lo) * 0.1, yl = lo - pad, yh = hi + pad, top = 4, bot = h - 4;
+      const ys = v => bot - (v - yl) / (yh - yl) * (bot - top);
+      const drawBands = (list, color) => { ctx.fillStyle = color; for (const [a, b] of list) { if (b < i0 || a > i1) continue; const xa = xs(T[Math.max(a, i0)]), xb = Math.max(xs(T[Math.min(b, i1)]), xa + 2); ctx.fillRect(xa, 0, xb - xa, h); } };
+      if (showW) drawBands(bands.wot, bw);
+      if (showK) drawBands(bands.knock, bk);
+      ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.beginPath();
+      X.ticks.forEach(t => { if (t < t0 || t > t1) return; const x = Math.round(xs(t)) + .5; ctx.moveTo(x, 0); ctx.lineTo(x, h); });
+      ctx.moveTo(0, Math.round(ys(lo)) + .5); ctx.lineTo(w, Math.round(ys(lo)) + .5); ctx.moveTo(0, Math.round(ys(hi)) + .5); ctx.lineTo(w, Math.round(ys(hi)) + .5);
+      ctx.stroke();
+      ctx.strokeStyle = css(PAL[k % PAL.length]); ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.beginPath();
+      let px = -1, mn = 0, mx = 0, first = 0, started = false;
+      const flush = () => { if (px < 0) return; if (!started) { ctx.moveTo(px, ys(first)); started = true; } else ctx.lineTo(px, ys(first)); ctx.lineTo(px, ys(mn)); ctx.lineTo(px, ys(mx)); };
+      for (let i = i0; i <= i1; i++) {
+        const v = col[i];
+        if (v == null) { flush(); px = -1; started = false; continue; }
+        const x = Math.round(xs(T[i]) * 2) / 2;
+        if (x !== px) { flush(); px = x; mn = mx = first = v; } else { if (v < mn) mn = v; if (v > mx) mx = v; }
+      }
+      flush(); ctx.stroke();
+      ctx.font = `10px ${mono}`; ctx.fillStyle = muted; ctx.textBaseline = 'middle';
+      ctx.fillText(fmt(hi), 4, Math.max(8, ys(hi) - 7)); ctx.fillText(fmt(lo), 4, Math.min(h - 7, ys(lo) + 7));
+    });
+    // x axis
+    const ax = $('#xaxis'), { ctx, w } = sizeCanvas(ax);
+    ctx.font = `11px ${mono}`; ctx.fillStyle = muted; ctx.textBaseline = 'top';
+    X.ticks.forEach(t => { if (t < t0 || t > t1) return; const x = (t - t0) / span * w; ctx.textAlign = x < 20 ? 'left' : x > w - 30 ? 'right' : 'center'; ctx.fillText(ft(t, X.step) + 's', x, 6); });
+    $('#rangeLbl').innerHTML = `Showing <b>${ft(t0, X.step)}–${ft(t1, X.step)} s</b> of ${Math.round(T[T.length - 1])} s${D.timeReal ? '' : ' (time estimated at 10 samples/s)'}`;
+    updateCursor();
+  }
+  function updateCursor() {
+    const st = $('#stack');
+    if (cur == null || cur < view.i0 || cur > view.i1) {
+      if (cursorEl) cursorEl.hidden = true; $('#curLbl').textContent = '';
+      sel.forEach(j => { const el = document.getElementById('sv' + j); if (el) el.textContent = '—'; });
+      return;
+    }
+    const w = st.clientWidth, x = (T[cur] - T[view.i0]) / ((T[view.i1] - T[view.i0]) || 1) * w;
+    cursorEl.hidden = false; cursorEl.style.left = `${x}px`;
+    $('#curLbl').innerHTML = `Cursor at <b>${T[cur].toFixed(1)} s</b>`;
+    sel.forEach(j => { const el = document.getElementById('sv' + j); if (el) el.textContent = fmt(P.cols[j][cur]); });
+  }
+
+  // pointer: hover/slide = cursor, mouse drag = zoom
+  let drag = null;
+  const st = $('#stack');
+  const xToIdx = clientX => { const r = st.getBoundingClientRect(), f = Math.max(0, Math.min(1, (clientX - r.left) / r.width)); return idxAt(T[view.i0] + f * (T[view.i1] - T[view.i0])); };
+  st.addEventListener('pointermove', e => {
+    if (!sel.length) return;
+    cur = xToIdx(e.clientX); updateCursor();
+    if (drag) { const r = st.getBoundingClientRect(), a = Math.min(drag, e.clientX) - r.left, b = Math.max(drag, e.clientX) - r.left; selEl.hidden = false; selEl.style.left = a + 'px'; selEl.style.width = (b - a) + 'px'; }
+  });
+  st.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse' && e.button === 0 && sel.length) { drag = e.clientX; } else if (e.pointerType !== 'mouse') { cur = xToIdx(e.clientX); updateCursor(); } });
+  window.addEventListener('pointerup', e => {
+    if (drag == null) return;
+    const dx = Math.abs(e.clientX - drag);
+    if (dx > 6) { const a = xToIdx(Math.min(drag, e.clientX)), b = xToIdx(Math.max(drag, e.clientX)); if (b - a >= 5) { view = { i0: a, i1: b }; drawStrips(); drawRel(); } }
+    drag = null; if (selEl) selEl.hidden = true;
+  });
+  st.addEventListener('pointerleave', () => { if (!drag) { cur = null; updateCursor(); } });
+
+  function zoom(f) {
+    const t0 = T[view.i0], t1 = T[view.i1], c = cur != null && cur >= view.i0 && cur <= view.i1 ? T[cur] : (t0 + t1) / 2;
+    let half = (t1 - t0) * f / 2; const full = T[T.length - 1] - T[0];
+    if (half * 2 >= full) { view = { i0: 0, i1: P.n - 1 }; }
+    else { let a = c - half, b = c + half; if (a < T[0]) { b += T[0] - a; a = T[0]; } if (b > T[T.length - 1]) { a -= b - T[T.length - 1]; b = T[T.length - 1]; } const i0 = idxAt(a), i1 = idxAt(b); if (i1 - i0 < 10) return; view = { i0, i1 }; }
+    drawStrips(); drawRel();
+  }
+  function pan(dir) {
+    const t0 = T[view.i0], t1 = T[view.i1], sh = (t1 - t0) / 2 * dir;
+    let a = t0 + sh, b = t1 + sh; if (a < T[0]) { b += T[0] - a; a = T[0]; } if (b > T[T.length - 1]) { a -= b - T[T.length - 1]; b = T[T.length - 1]; }
+    view = { i0: idxAt(a), i1: idxAt(b) }; drawStrips(); drawRel();
+  }
+  $('#bIn').onclick = () => zoom(0.5); $('#bOut').onclick = () => zoom(2); $('#bReset').onclick = () => { view = { i0: 0, i1: P.n - 1 }; drawStrips(); drawRel(); };
+  $('#bLeft').onclick = () => pan(-1); $('#bRight').onclick = () => pan(1);
+  $('#mKnock').onchange = drawStrips; $('#mWot').onchange = drawStrips;
+  $('#pkSearch').oninput = renderPicker;
+
+  // ---------- relationships ----------
+  function relPresets() {
+    const L = [
+      ['Where knock happens', 'rpm', 'load', 'knock'],
+      ['MAF vs fuel trim', 'maf', 'ltft', 'stft'],
+      ['AFR across the rev range', 'rpm', 'afr', 'tps'],
+      ['Timing vs intake heat', 'iat', 'timing', 'rpm'],
+      ['Heat soak vs speed', 'speed', 'iat', 'ect'],
+    ].filter(([, x, y]) => colOf(x) != null && colOf(y) != null);
+    $('#relPresets').innerHTML = L.map(([n], k) => `<button type="button" data-r="${k}">${n}</button>`).join('');
+    document.querySelectorAll('#relPresets button').forEach(b => b.onclick = () => { const [, x, y, c] = L[+b.dataset.r]; rel = { x: colOf(x), y: colOf(y), c: colOf(c) }; renderRelSelects(); drawRel(); });
+  }
+  function renderRelSelects() {
+    const opts = (v, none) => (none ? `<option value="">None</option>` : '') + channels().map(j => `<option value="${j}"${v === j ? ' selected' : ''}>${esc(meta[j].header)}</option>`).join('');
+    $('#rx').innerHTML = opts(rel.x); $('#ry').innerHTML = opts(rel.y); $('#rc').innerHTML = opts(rel.c, true);
+  }
+  ['rx', 'ry', 'rc'].forEach(id => $('#' + id).onchange = e => { const v = e.target.value; rel[id[1]] = v === '' ? null : +v; drawRel(); });
+
+  function drawRel() {
+    const cv = $('#scatter'), { ctx, w, h } = sizeCanvas(cv);
+    if (rel.x == null || rel.y == null) { $('#rstat').textContent = 'Pick two channels.'; return; }
+    const xs = P.cols[rel.x], ys = P.cols[rel.y], cs = rel.c != null ? P.cols[rel.c] : null, i0 = view.i0, i1 = view.i1;
+    let xl = Infinity, xh = -Infinity, yl = Infinity, yh = -Infinity, cl = Infinity, ch = -Infinity, n = 0;
+    for (let i = i0; i <= i1; i++) { const x = xs[i], y = ys[i]; if (x == null || y == null) continue; n++; if (x < xl) xl = x; if (x > xh) xh = x; if (y < yl) yl = y; if (y > yh) yh = y; if (cs && cs[i] != null) { if (cs[i] < cl) cl = cs[i]; if (cs[i] > ch) ch = cs[i]; } }
+    const mono = css('--f-mono') || 'monospace', muted = css('--muted'), grid = css('--grid');
+    const m = { l: 56, r: 12, t: 10, b: 40 }, iw = w - m.l - m.r, ih = h - m.t - m.b;
+    if (!n) { $('#rstat').textContent = 'These two channels have no data in the same rows.'; return; }
+    const X = nice(xl, xh, Math.max(3, Math.round(iw / 90))), Y = nice(yl, yh, Math.max(3, Math.round(ih / 50)));
+    const sx = v => m.l + (v - X.lo) / (X.hi - X.lo) * iw, sy = v => m.t + ih - (v - Y.lo) / (Y.hi - Y.lo) * ih;
+    ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.beginPath();
+    Y.ticks.forEach(v => { const y = Math.round(sy(v)) + .5; ctx.moveTo(m.l, y); ctx.lineTo(m.l + iw, y); });
+    X.ticks.forEach(v => { const x = Math.round(sx(v)) + .5; ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ih); });
+    ctx.stroke();
+    ctx.font = `11px ${mono}`; ctx.fillStyle = muted; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+    Y.ticks.forEach(v => ctx.fillText(ft(v, Y.step), m.l - 8, sy(v)));
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    X.ticks.forEach(v => ctx.fillText(ft(v, X.step), sx(v), m.t + ih + 6));
+    ctx.fillText(meta[rel.x].header, m.l + iw / 2, h - 16);
+    ctx.save(); ctx.translate(12, m.t + ih / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; ctx.fillText(meta[rel.y].header, 0, 0); ctx.restore();
+    const stops = [css('--g1'), css('--g2'), css('--g3')].map(hex), base = css('--c1');
+    const step = Math.max(1, Math.floor((i1 - i0 + 1) / 8000)), crange = (ch - cl) || 1;
+    ctx.globalAlpha = 0.6;
+    const idx = []; for (let i = i0; i <= i1; i += step) if (xs[i] != null && ys[i] != null) idx.push(i);
+    if (cs) idx.sort((a, b) => (cs[a] ?? -Infinity) - (cs[b] ?? -Infinity)); // draw high values on top
+    for (const i of idx) { ctx.fillStyle = cs ? (cs[i] == null ? muted : grad((cs[i] - cl) / crange, stops)) : base; ctx.fillRect(sx(xs[i]) - 1.4, sy(ys[i]) - 1.4, 2.8, 2.8); }
+    ctx.globalAlpha = 1;
+    const r = corr(xs, ys, i0, i1);
+    $('#rstat').innerHTML = r == null ? 'Not enough variation to measure how these relate.' : `Correlation <b>r = ${r.toFixed(2)}</b>: in this stretch they ${strength(r)}. Correlation shows they change together, not that one causes the other.`;
+    const g = $('#grad'); g.hidden = !cs; if (cs) { $('#gLo').textContent = fmt(cl); $('#gHi').textContent = `${fmt(ch)} ${meta[rel.c].name}`; }
+    renderRelated();
+  }
+  function renderRelated() {
+    const y = rel.y, list = [];
+    channels().forEach(j => { if (j === y || meta[j].flat) return; const r = corr(P.cols[j], P.cols[y], view.i0, view.i1); if (r != null) list.push([j, r]); });
+    list.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    const top = list.slice(0, 7);
+    $('#related').innerHTML = `<h3>Moves most with ${esc(meta[y].name)}</h3><p>Click one to plot it across the bottom.</p>` +
+      (top.length ? top.map(([j, r]) => `<button type="button" class="rr" data-j="${j}" title="${esc(meta[j].header)}"><span>${esc(meta[j].header)}</span><span class="bar"><i style="width:${Math.round(Math.abs(r) * 100)}%;background:${r >= 0 ? 'var(--c1)' : 'var(--c2)'}"></i></span><em>${r >= 0 ? '+' : '−'}${Math.abs(r).toFixed(2)}</em></button>`).join('') : '<p>No other channel varies enough here to compare.</p>') +
+      `<p><span style="color:var(--c1)">■</span> rise together &nbsp; <span style="color:var(--c2)">■</span> one rises as the other falls</p>`;
+    document.querySelectorAll('#related .rr').forEach(b => b.onclick = () => { rel.x = +b.dataset.j; renderRelSelects(); drawRel(); });
+  }
+
+  // ---------- mapping ----------
+  function renderMap() {
+    $('#map').innerHTML = Core.FIELDS.map(f => `<label for="m-${f.key}">${esc(f.label)}<select id="m-${f.key}" data-k="${f.key}"><option value="">Not logged</option>${P.headers.map((h, i) => `<option value="${i}"${map[f.key] === i ? ' selected' : ''}>${esc(h)}</option>`).join('')}</select></label>`).join('');
+    document.querySelectorAll('#map select').forEach(s => s.onchange = () => { if (s.value === '') delete map[s.dataset.k]; else map[s.dataset.k] = +s.value; safe(() => { analyze(); renderNotes(); presets(); relPresets(); drawStrips(); }); });
+  }
+
+  function renderAll() {
+    $('#error').hidden = true;
+    renderSource(); renderNotes(); presets(); renderPicker(); buildStrips(); relPresets(); renderRelSelects(); drawRel(); renderMap();
+  }
+  function safe(fn) { try { fn(); } catch (e) { console.error(e); showErr('Something in this log could not be read: ' + e.message); } }
+  function showErr(msg) { const el = $('#error'); el.textContent = msg; el.hidden = false; }
+
+  function loadFile(file) {
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = () => safe(() => { const p = Core.parseCSV(String(fr.result)); load(p, { example: false, name: file.name }); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    fr.onerror = () => showErr('The file could not be read. Try exporting the log again.');
+    fr.readAsText(file);
+  }
+  $('#file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
+  const drop = $('#drop');
+  ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  document.addEventListener('dragleave', e => { if (e.target === document.documentElement || !e.relatedTarget) drop.classList.remove('over'); });
+  document.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); loadFile(e.dataTransfer && e.dataTransfer.files[0]); });
+
+  // redraw on resize and theme change
+  let raf = 0; const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { if (P) { drawStrips(); drawRel(); } }); };
+  try { new ResizeObserver(redraw).observe($('#stack')); new ResizeObserver(redraw).observe($('#scatter')); } catch (e) { window.addEventListener('resize', redraw); }
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redraw); } catch (e) { }
+  new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
+
+  safe(() => load(Core.sample(), { example: true }));
+})();
+</script>
+</body>
+</html>
