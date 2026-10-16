@@ -388,6 +388,23 @@ const Core = (() => {
   }
   const isWot = (d, i) => d.wot[i];
 
+  // Was the knock mostly before full warm-up? Also: how long the engine spent at the same rpm/load warm with no knock.
+  function knockWarm(d, idx) {
+    if (!d.ect) return {};
+    const cold = 87.8; // 190°F
+    const withE = idx.filter(i => d.ect[i] != null); if (!withE.length) return {};
+    const coldShare = withE.filter(i => d.ect[i] < cold).length / withE.length;
+    const ectF = toF(mean(pick(d.ect, withE)));
+    let warmClean = 0;
+    if (d.rpm && d.load) {
+      const r1 = pct(pick(d.rpm, idx), 0.05), r2 = pct(pick(d.rpm, idx), 0.95), l1 = pct(pick(d.load, idx), 0.05), l2 = pct(pick(d.load, idx), 0.95);
+      for (let i = 1; i < d.n; i++) {
+        if (d.ect[i] == null || d.ect[i] < cold || (d.knock[i] != null && d.knock[i] >= 0.5)) continue;
+        if (d.rpm[i] >= r1 && d.rpm[i] <= r2 && d.load[i] >= l1 && d.load[i] <= l2) { const dt = d.t[i] - d.t[i - 1]; if (dt > 0 && dt < 2) warmClean += dt; }
+      }
+    }
+    return { coldShare, ectF, warmClean };
+  }
   function knock(d) {
     if (!d.knock) return null;
     const idx = []; for (let i = 0; i < d.n; i++) if (d.knock[i] >= 0.5) idx.push(i);
@@ -408,7 +425,7 @@ const Core = (() => {
       ? { type: 'scatter', x: d.rpm, y: d.load, hi: d.knock.map(v => v >= 0.5), xlabel: 'Engine speed (rpm)', ylabel: 'Load (%)', hiLabel: 'Knock', loLabel: 'All other samples' }
       : { type: 'line', x: d.t, series: [{ y: d.knock, cls: 'crit', name: 'Knock retard (°)' }], ylabel: 'Retard (°)' };
     return {
-      id: 'knock', facts: { where, mx, events: ev.length, iatF: d.iat ? toF(mean(pick(d.iat, idx))) : null, single: ev.every(e => e.idx.length <= 2) }, focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
+      id: 'knock', facts: Object.assign({ where, mx, events: ev.length, iatF: d.iat ? toF(mean(pick(d.iat, idx))) : null, single: ev.every(e => e.idx.length <= 2) }, knockWarm(d, idx)), focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
       found,
       why: 'Knock is fuel exploding instead of burning smoothly. The ECU protects the engine by pulling timing, which costs power. Repeated or heavy knock can damage pistons, ring lands and rod bearings.',
       fixes: [
@@ -695,33 +712,66 @@ const Core = (() => {
   // Suggestions depend on what the car has. Hardware and sensor causes come first; tune changes only after.
   const SETUP = [
     { key: 'intake', label: 'Intake and MAF housing', opts: [['stock', 'Stock'], ['modified', 'Aftermarket or modified']] },
-    { key: 'injectors', label: 'Injectors', opts: [['stock', 'Stock'], ['upgraded', 'Upgraded']] },
-    { key: 'engine', label: 'Engine', opts: [['stock', 'Original, stock'], ['modified', 'Swapped or modified']] },
+    { key: 'injectors', label: 'Injectors', opts: [['stock', 'Original for this engine'], ['upgraded', 'Upgraded']] },
+    { key: 'engine', label: 'Engine', opts: [['stock', 'Original, stock'], ['swap', 'Swapped (e.g. 2.5 MZR)'], ['modified', 'Modified internals']] },
     { key: 'octane', label: 'Fuel', opts: [['unknown', 'Not sure'], ['87', '87'], ['91', '91'], ['93', '93']] },
+    { key: 'software', label: 'Tuning software', opts: [['other', 'Other or not sure'], ['versatuner', 'VersaTuner (NC Miata)'], ['romdrop', 'RomDrop (NC Miata)'], ['ncflash', 'NC Flash']] },
   ];
 
+  // Table names. Only names confirmed from the software itself (VersaTuner, NC1 screens)
+  // or from the "NC Miata tuning - RomDrop edition" guide are used. Everything else stays generic.
+  const NAMES = {
+    injScale: { versatuner: '"Injector Scaling Global" (dead time: "Injector Opening Time")', romdrop: '"Injector Scaling – Global Multiplier" (dead time: "Injector Battery Offset")', generic: 'the injector size and dead-time (latency) settings' },
+    maf: { versatuner: '"MAF Sensor Calibration 1" and "MAF Sensor Calibration 2"', generic: 'the MAF calibration table' },
+    displacement: { versatuner: '"Engine Displacement 1" and "Engine Displacement 2" (or the "2.5l Engine Swap" option)', generic: 'the engine size (displacement) setting' },
+    loadLimit: { versatuner: '"Operating Load Limit 1" and "Operating Load Limit 2"', generic: 'the load limit table' },
+    wotAfr: { versatuner: '"Open Loop WOT AFR Target 2" and "3" (looked up by throttle position)', romdrop: '"Fuel Target OL – Base"', generic: 'the full-throttle (open-loop) fuel target table' },
+    ptAfr: { versatuner: '"Open Loop Part Throttle AFR Target 2" and "3" (looked up by load)', romdrop: '"Fuel Target OL – Base"', generic: 'the part-throttle open-loop fuel target table' },
+    hle: { versatuner: '"High Load Enleanment"', romdrop: '"Fuel Comp OL – Power Enleanment"', generic: 'the high-rpm / high-load enleanment table' },
+    timing: { versatuner: 'all four timing tables: "Timing – Closed Loop Normal", "Timing – Closed Loop Knocking", "Timing – Open Loop Normal" and "Timing – Open Loop Knocking". Make the same cut in all four. At cruise the Knocking tables are almost the same as the Normal ones, so cutting only one may not change what the engine gets', romdrop: '"Spark Target – Base". Also check "Spark Limit – Base", because the ECU uses the lower of the two. The guide notes the OL and CL labels on these were swapped in older definitions', generic: 'the ignition timing table' },
+    ectIat: { versatuner: '"Timing – ECT IAT Adjustment 1" and "2" (the "Multiplier" table sets how much of it applies at each rpm)', generic: 'the coolant/intake-temperature timing correction table' },
+    ksSafe: { romdrop: '"KS Safe Base – Scaling"' },
+    dbw: { versatuner: '"APP to DBW Throttle Duty Cycle Gear – 1", "2", "3" and "4,5,6"', romdrop: '"DBW – Throttle Position > APP to TP Desired" (and its Data Integrity tables, per the guide)', generic: 'the pedal-to-throttle map' },
+    dfco: { versatuner: '"Decel Fuel Cut RPM Threshold" and "Decel Fuel Cut Load Threshold"', romdrop: 'the "DFCO Disable" patch (most people keep fuel cut on)', generic: 'the decel fuel cut thresholds' },
+    idleRpm: { versatuner: '"Idle RPM – In Gear" and "Idle RPM – Neutral"', generic: 'the idle target rpm table' },
+    fan: { romdrop: '"Engine Control – Fan"', generic: 'the fan temperature settings' },
+  };
+  const SRC = { versatuner: 'VersaTuner name', romdrop: 'RomDrop guide name' };
+  const nm = (key, sw) => { const n = NAMES[key] || {}; return n[sw] ? `${n[sw]} [${SRC[sw]}]` : (n.generic || ''); };
+
   function advise(issue, setup) {
-    const f = issue.facts || {}, S = Object.assign({ intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown' }, setup || {});
-    const allStock = S.intake === 'stock' && S.injectors === 'stock';
+    const f = issue.facts || {}, S = Object.assign({ intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown', software: 'other' }, setup || {});
+    const sw = S.software, swap = S.engine === 'swap', notStock = S.engine !== 'stock';
+    const allStock = S.intake === 'stock' && S.injectors === 'stock' && S.engine === 'stock';
     const a = { note: '', check: [], tune: [], noTune: '', table: null };
-    const injCheck = 'Confirm the injector size and latency (dead time) in the tune match the injectors you installed. Wrong injector data throws fueling off everywhere, and no other table change will fix it.';
+    const injCheck = swap
+      ? 'Check the tune knows which injectors are in the engine now. A swapped engine often brings bigger injectors than the old tune expects (a 2.5 MZR\'s are bigger than a 2.0\'s). If the tune still has the old size, fueling is off everywhere and no other table will fix it.'
+      : 'Confirm the injector size and dead time (latency) in the tune match the injectors you installed. Wrong injector data throws fueling off everywhere, and no other table change will fix it.';
+    const dispCheck = `Check the tune is set for the engine size you have now: ${nm('displacement', sw)}. If it still has the old size, the ECU calculates load wrong, and fuel and timing are wrong with it.`;
 
     switch (issue.id) {
       case 'trims': {
         const head = ['Airflow range', 'Samples', 'Avg trim'];
+        const worstRow = f.rows && f.rows.length ? f.rows.reduce((w, r) => Math.abs(r.m) > Math.abs(w.m) ? r : w) : null;
+        const thin = worstRow && worstRow.n < 100;
         if (S.intake === 'modified') {
-          a.note = 'You have a modified intake, so the factory MAF calibration probably no longer matches your airflow. Rescaling the MAF is the right fix once leaks are ruled out.';
-          if (S.injectors === 'upgraded') a.check.push(injCheck);
+          a.note = 'You have a modified intake, so the factory MAF calibration probably no longer matches your airflow. Rescaling the MAF is the right fix once leaks and injector data are ruled out.';
+          if (S.injectors === 'upgraded' || swap) a.check.push(injCheck);
+          if (swap) a.check.push(dispCheck);
           a.check.push('Smoke-test for leaks first, especially every joint on the new intake between the MAF and the throttle body.');
+          if (thin) a.check.push(`Only ${worstRow.n} samples back the worst area (${worstRow.lab}). Short bursts, like pressing the pedal quickly, skew trims. Log more steady driving there before changing that part of the table.`);
           if (f.axis === 'maf') {
-            a.tune.push('Rescale the MAF table with the corrections below: change the airflow value at each voltage breakpoint by the percentage shown.');
-            a.table = { head: [...head, 'Suggested change'], rows: f.rows.map(r => [r.lab, r.n, `${sgnS(r.m)}%`, Math.abs(r.m) < 2 ? 'Leave as is' : `${sgnS(r.m)}% airflow`]) };
+            a.tune.push(`Rescale ${nm('maf', sw)} with the corrections below: change the airflow value at each voltage breakpoint by the percentage shown. Keep the curve smooth: each value must be higher than the one before.`);
+            if (sw === 'versatuner') a.tune.push('Change MAF Sensor Calibration 1 and 2 the same way.');
+            a.table = { head: [...head, 'Suggested change'], rows: f.rows.map(r => [r.lab, r.n, `${sgnS(r.m)}%`, Math.abs(r.m) < 2 || r.n < 100 ? 'Leave as is' : `${sgnS(r.m)}% airflow`]) };
           } else a.tune.push('Log MAF voltage too, so this tool can give a correction for each MAF breakpoint.');
-          a.tune.push('After flashing, reset fuel trims, drive 20 minutes of mixed roads, and re-log. Repeat until every range is within ±3%.');
+          a.tune.push('After flashing, drive 20–30 minutes of mixed roads before judging (trims often reset after a flash), then re-log. Repeat until every range is within ±3%.');
           break;
         }
         a.note = 'Your intake is stock, so the factory MAF calibration already matches your airflow path. Do not rescale the MAF to chase these trims. That hides the real fault and makes fueling wrong somewhere else.';
-        if (S.injectors === 'upgraded') a.check.push(injCheck);
+        if (S.injectors === 'upgraded' || swap) a.check.push(injCheck);
+        if (swap) a.check.push(dispCheck);
+        if (thin) a.check.push(`Only ${worstRow.n} samples back the worst area (${worstRow.lab}). Short bursts, like pressing the pedal quickly, skew trims. Log more steady driving there before acting on it.`);
         if (f.pos) {
           if (f.pattern === 'low') a.check.push('Trims are highest at idle and light cruise and shrink as airflow rises. That is the classic vacuum-leak pattern, because a small leak is a large share of the air at idle. Smoke-test the intake: vacuum hoses, PCV hose, brake booster line, intake manifold gasket, and the boot between the MAF and throttle body.');
           else if (f.pattern === 'high') a.check.push('Trims grow as airflow rises. That points to fuel delivery not keeping up: check fuel pressure, the fuel filter and the pump.');
@@ -730,41 +780,82 @@ const Core = (() => {
           if (f.pattern !== 'high') a.check.push('Check fuel pressure and the fuel filter.');
           if (f.pattern === 'low') a.check.push('Clean the MAF sensor element with MAF cleaner.');
         } else {
+          if (swap && f.pattern === 'all') a.check.push('Negative trims everywhere on a swapped engine usually mean the injectors are bigger than the tune thinks. Fix the injector data before anything else.');
           a.check.push('Negative trims on a stock intake usually mean extra fuel is getting in. Check for a leaking injector, fuel pressure that is too high, and a purge (EVAP) valve stuck open.');
           a.check.push('Check the upstream O2 sensor. A slow or failing sensor can cause trims to drift.');
           a.check.push('Clean the MAF sensor element with MAF cleaner. Some contamination makes the sensor over-read.');
         }
-        if (S.engine === 'modified') a.check.push('On a swapped or modified engine, check that any engine-specific settings in the tune, such as injector data, match the parts actually installed.');
-        a.noTune = 'Change the tune only if all the checks come back clean and trims stay above ±5% after a trim reset and a 20-minute drive. In that case, ask for help on the forum with your log before touching the MAF table.';
+        if (S.engine === 'modified') a.check.push('On a modified engine, check that engine-specific settings in the tune, such as injector data and engine size, match the parts actually installed.');
+        if (S.injectors === 'upgraded' || swap) a.tune.push(`If the injector data is wrong, correct it in ${nm('injScale', sw)}. Change it by the size difference, not by the trim number. Then re-log.`);
+        a.noTune = 'Apart from injector or engine-size data, change the tune only if every check comes back clean and trims stay beyond ±5% after 20–30 minutes of driving on the new tune. In that case, ask for help on a forum with your log before touching the MAF table.';
         if (f.rows && f.rows.length) a.table = { head, rows: f.rows.map(r => [r.lab, r.n, `${sgnS(r.m)}%`]), caption: 'Where the correction happens' };
         break;
       }
       case 'knock': {
+        const warmUp = f.coldShare != null && f.coldShare >= 0.7 && f.ectF != null;
         if (S.octane === '87') a.check.push('You are running 87. If your tune was built for premium fuel, that alone explains the knock. Go back to 91–93 and re-log before changing the tune.');
         else if (S.octane === 'unknown') a.check.push('Confirm the fuel octane matches what the tune was built for. A tune made for premium will knock on 87.');
+        if (warmUp) {
+          a.note = `Most of this knock happened before the engine was fully warm (coolant about ${Math.round(f.ectF)}°F).${f.warmClean >= 30 ? ` This log also has ${Math.round(f.warmClean)} s at the same rpm and load with warm coolant and no knock.` : ''} That points at a warm-up condition, not the main timing map.`;
+          a.check.push('Make sure it repeats. Log a few more drives that start cold and go straight onto the same road. One drive is not a pattern.');
+        }
         if (f.iatF != null && f.iatF > 120) a.check.push(`Intake air was about ${Math.round(f.iatF)}°F when it knocked. Bring intake temperature down first, then re-log.`);
-        if (f.single) a.check.push('Every event was a single short blip. That is often false knock from mechanical noise. Check for loose heat shields, exhaust hangers and a loose knock sensor bolt before pulling timing.');
+        if (f.single) a.check.push('Every event was a single short blip. That is often false knock from mechanical noise, or a one-off like a clutch engagement. Check heat shields, exhaust hangers and the knock sensor bolt before pulling timing.');
+        else a.check.push('Check heat shields, exhaust hangers and the knock sensor bolt. Loose parts make noise the ECU can hear as knock.');
         a.check.push('Check the spark plugs: correct type and gap, and no heavy carbon.');
-        a.tune.push(f.where ? `If knock repeats in the same place after those checks, remove 1–2° from the ignition timing table around ${f.where}, flash, and re-log the same pull. Repeat in small steps.` : 'If knock repeats in the same place after those checks, remove 1–2° from the ignition timing table where it happened, flash, and re-log.');
-        if (S.engine === 'modified') a.tune.push('On a swapped or modified engine, the original engine\'s timing may simply be too aggressive. Work up from conservative timing instead of starting from the original map.');
+        a.check.push('A log cannot tell real knock from noise. Both pull timing the same way. Treat it as real until the checks prove otherwise.');
+        if (warmUp) {
+          a.tune.push(`If it keeps happening only with cool coolant, pull a little timing only at those temperatures, using ${nm('ectIat', sw)}. Start with 2–3° in the coolant columns below about 190°F. Leave the fully warm column at 0. Flash, then re-log a cold start straight onto the same road.`);
+          if (sw === 'romdrop') a.tune.push(`Advanced, only if you prove it is noise: ${nm('ksSafe', sw)} sets how easily the ECU calls knock. Raising it also hides real knock, so get a second opinion first.`);
+        } else {
+          a.tune.push(`If knock repeats in the same place after those checks, remove 1–2° around ${f.where || 'where it happened'} in ${nm('timing', sw)}. Flash and re-log the same conditions. Repeat in small steps.`);
+        }
+        if (notStock) a.tune.push(swap ? 'On a swapped engine, the old engine\'s timing may be too aggressive for the new one. Work up from conservative timing instead of trusting the old map.' : 'On a modified engine, work up from conservative timing instead of trusting the original map.');
         break;
       }
       case 'lean': {
-        if (allStock && S.engine === 'stock') a.note = 'On a fully stock car, factory full-throttle fueling is normally rich and safe. A lean reading here is more likely a sensor or fuel-delivery problem than a tune problem.';
-        if (S.injectors === 'upgraded') a.check.push(injCheck);
-        a.check.push('Rule out a false reading: do a free-air calibration on the wideband and check for exhaust leaks ahead of the sensor.');
+        if (allStock) a.note = 'On a fully stock car, factory full-throttle fueling is normally rich and safe. A lean reading here is more likely a sensor or fuel-delivery problem than a tune problem.';
+        if (swap) { a.note = 'On a swapped engine, check the tune\'s engine size and load limit first. If load is calculated wrong or capped, full-throttle fuel stops rising and the engine goes lean.'; a.check.push(dispCheck); }
+        if (S.injectors === 'upgraded' || swap) a.check.push(injCheck);
+        a.check.push('Rule out a false reading. Check for exhaust leaks ahead of the O2 sensor. If you use an add-on wideband, do its free-air calibration.');
         a.check.push(f.risesWithRpm ? 'The lean starts high in the rev range, which points at fuel delivery. Check fuel pressure under load, the fuel filter and the pump.' : 'Check fuel pressure under load, the fuel filter and the pump.');
-        a.tune.push(`If the checks pass, add fuel in the full-throttle (open-loop) fuel or target AFR table${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the wideband reads about 12.6–12.8.`);
+        a.tune.push(`If the checks pass, add fuel in ${nm('wotAfr', sw)}${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the mixture reads about 12.5–12.8 AFR (λ 0.85–0.87).`);
+        if (f.risesWithRpm) a.tune.push(`Also check ${nm('hle', sw)}. It leans the mixture at high rpm and load on purpose.`);
+        a.noTune = 'Stay out of full throttle until this is fixed. Lean and loaded is how engines break.';
+        break;
+      }
+      case 'loadcap': {
+        a.note = `Load stayed flat at about ${Math.round(f.cap)}% from ${f.rpmFrom} to ${f.rpmTo} rpm under high load. A flat line like that usually means the tune is capping load, not that the engine stopped breathing.`;
+        a.check.push('Check it is the same value on every pull. A real cap repeats exactly.');
+        if (swap) a.check.push(dispCheck);
+        a.check.push(f.afrMed != null && f.afrMed > 13.2 ? `The mixture during the flat part was about ${f.afrMed.toFixed(1)} AFR, which is lean. Fuel follows load, so a capped load means too little fuel. No full throttle until this is fixed.` : 'Look at the mixture during the flat part. Fuel follows load, so a capped load can mean too little fuel.');
+        a.tune.push(`If the engine size is right, raise ${nm('loadLimit', sw)} a little above the highest load on a clean pull. Then re-log and check mixture and knock before going higher.`);
+        break;
+      }
+      case 'fuelcut': {
+        a.note = `The engine cut fuel ${f.events} times while the pedal was still slightly pressed (up to ${f.pedalMax.toFixed(1)}%). You feel this as a sudden loss of power at very light pedal.`;
+        a.check.push('Normal fuel cut happens with your foot fully off. Check the pedal reads 0% at rest, so a worn or misread pedal sensor is not the cause.');
+        a.check.push('Make sure it shows up in several logs, not just one.');
+        a.tune.push(`If it repeats, open the throttle slightly at the smallest pedal values in ${nm('dbw', sw)}, so the ECU no longer sees a closed throttle there.`);
+        a.tune.push(`If you'd rather change when fuel cut starts, look at ${nm('dfco', sw)}.`);
+        break;
+      }
+      case 'hle': {
+        a.note = `The mixture got ${f.rise.toFixed(1)} AFR leaner above ${f.from} rpm than at 4,500–5,500 rpm.`;
+        a.check.push('Check fuel pressure at high rpm, the pump and the filter. A weak pump falls off at the top.');
+        a.tune.push(`Some tunes lean the mixture at high rpm and load on purpose. Check ${nm('hle', sw)}. Setting it to 0 keeps the mixture where ${nm('wotAfr', sw)} asks for it.`);
         break;
       }
       case 'cruise': {
+        if (f.olShare != null && f.olShare >= 0.3) a.note = `The ECU was in open loop for ${Math.round(f.olShare * 100)}% of this cruising, so it chose to run rich there. That is set by the tune, not caused by a fault.`;
         a.check.push('Make sure the engine was fully warm. A cold engine adds fuel on purpose.');
         a.check.push('Check the upstream O2 sensor. If it is slow or dead, the ECU cannot hold 14.7.');
         a.check.push('Check for a leaking injector or fuel pressure that is too high.');
-        a.tune.push('If the hardware is fine and your tune has been changed, check the switch point between closed loop and open loop. If cruise load triggers open loop, the tune is running rich there on purpose.');
+        a.tune.push(`If the hardware is fine, check when the tune leaves closed loop at part throttle. If cruise load reaches open loop, it runs ${nm('ptAfr', sw)} there.`);
         break;
       }
       case 'iat': {
+        if (f.idleHot) a.check.push('Rising intake temperature at stops is normal heat soak. It drops once you move. Judge intake temperature while driving.');
         a.check.push('Shield or insulate heat sources near the intake, especially the exhaust manifold or header.');
         a.check.push('Seal the airbox so it breathes outside air instead of engine-bay air.');
         a.check.push('Compare logs before and after a fix on the same route at a similar outside temperature.');
@@ -772,22 +863,31 @@ const Core = (() => {
         break;
       }
       case 'ect': {
-        if (f.kind === 'hot') { a.check.push('Check the coolant level and bleed air out of the system.'); a.check.push('Confirm the radiator fan turns on.'); a.check.push('Inspect the radiator for blockage and the water pump for leaks.'); }
-        else { a.check.push('Replace the thermostat if the engine is slow to warm up or cools down on the highway. A thermostat stuck open is a common cause of a sudden drop in mpg.'); a.check.push('Compare the logged coolant reading with a separate gauge to rule out a bad sensor.'); }
+        if (f.kind === 'hot') {
+          a.check.push('Check the coolant level and bleed air out of the system, especially after an engine swap.');
+          a.check.push('Confirm the radiator fan turns on.');
+          a.check.push('Inspect the radiator for blockage and the water pump for leaks.');
+          a.check.push(`If you changed fan settings in the tune, put them back to stock: ${nm('fan', sw)}.`);
+        } else {
+          a.check.push('Replace the thermostat if the engine is slow to warm up or cools down on the highway. A thermostat stuck open is a common cause of a sudden drop in mpg.');
+          a.check.push('Compare the logged coolant reading with a separate gauge to rule out a bad sensor.');
+        }
         a.noTune = 'No tune change needed. This is a cooling-system problem.';
         break;
       }
       case 'idle': {
         if (f.kind === 'under') {
-          if (allStock) a.note = 'With a stock intake and throttle body, the factory idle settings normally handle coming to a stop. Check the hardware first.';
-          a.check.push('Clean the throttle body. Carbon buildup reduces the air the ECU can let in at idle.');
+          if (S.intake === 'stock') a.note = 'With a stock intake and throttle body, the factory idle settings normally handle coming to a stop. Check the hardware first.';
+          a.check.push('Clean the throttle body. Carbon buildup reduces the air the ECU can let in at idle. Some drive-by-wire cars need an idle relearn after cleaning, so check your car\'s procedure.');
           a.check.push('Smoke-test for vacuum leaks.');
           a.check.push('Notice how you come to a stop. Rolling out the clutch with no throttle can cause a one-off dip that is not a tune problem.');
           a.tune.push('If the dip still happens on most stops after cleaning, slightly increase the return-to-idle airflow (dashpot or throttle follower) in the tune.');
+          if (sw === 'versatuner') a.tune.push(`Raising the idle target a little also helps: ${nm('idleRpm', sw)}.`);
         } else {
           a.check.push('Check the spark plugs, coils and their connectors. A loose connector can cause a misfire that comes and goes.');
           a.check.push('Smoke-test for vacuum leaks.');
           a.check.push('Clean the throttle body.');
+          a.check.push('Check whether the dips line up with the radiator fan or A/C switching on. Those loads cause small, normal dips.');
           a.noTune = 'Usually no tune change needed. A rough idle or misfire is almost always a hardware problem.';
         }
         break;
