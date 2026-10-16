@@ -70,11 +70,33 @@ button, select, input { font: inherit; }
 .notes { display: grid; gap: 12px; }
 .notes-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
 .notes-head p { color: var(--muted); font-size: .85rem; }
-.nlist { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 10px; }
+.nlist { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 10px; align-items: start; }
 .note { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; align-items: baseline; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; }
 .note p { grid-column: 2; color: var(--muted); font-size: .86rem; }
-.note button { grid-column: 2; justify-self: start; margin-top: 6px; background: none; border: 1px solid var(--line); color: var(--accent); border-radius: 6px; padding: 4px 10px; font-size: .84rem; font-weight: 500; cursor: pointer; }
+.note .nact button {  justify-self: start; margin-top: 6px; background: none; border: 1px solid var(--line); color: var(--accent); border-radius: 6px; padding: 4px 10px; font-size: .84rem; font-weight: 500; cursor: pointer; }
 .note button:hover { border-color: var(--accent); }
+.setup { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 13px; }
+.setup-t { font-size: .74rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 600; align-self: center; }
+.setup label { display: grid; gap: 3px; font-size: .76rem; color: var(--muted); min-width: 0; flex: 1 1 150px; max-width: 220px; }
+.setup p { flex: 1 1 100%; font-size: .8rem; color: var(--muted); }
+.nact { grid-column: 2; display: flex; gap: 8px; }
+.note .nact button { margin-top: 6px; }
+.advice { grid-column: 1 / -1; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.advice summary { cursor: pointer; font-weight: 600; font-size: .88rem; color: var(--accent); }
+.abody { display: grid; gap: 10px; margin-top: 10px; font-size: .88rem; }
+.abody > * { grid-column: auto; min-width: 0; }
+.abody p { grid-column: auto; color: var(--ink); max-width: 70ch; font-size: .88rem; }
+.note:has(details[open]) { grid-column: 1 / -1; }
+.abody h4 { margin: 0 0 4px; font-size: .72rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.abody ol { margin: 0; padding-left: 20px; display: grid; gap: 5px; }
+.anote { background: var(--accent-soft); border-radius: 6px; padding: 8px 10px; }
+.notune { background: var(--ok-soft); border-radius: 6px; padding: 8px 10px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: auto; min-width: min(100%, 420px); font-size: .84rem; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+td { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+td.fix { color: var(--accent); font-weight: 500; }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; align-self: center; }
 .dot.crit { background: var(--crit); } .dot.warn { background: var(--warn); } .dot.ok { background: var(--ok); }
 .okline { font-size: .86rem; color: var(--muted); }
@@ -386,7 +408,7 @@ const Core = (() => {
       ? { type: 'scatter', x: d.rpm, y: d.load, hi: d.knock.map(v => v >= 0.5), xlabel: 'Engine speed (rpm)', ylabel: 'Load (%)', hiLabel: 'Knock', loLabel: 'All other samples' }
       : { type: 'line', x: d.t, series: [{ y: d.knock, cls: 'crit', name: 'Knock retard (°)' }], ylabel: 'Retard (°)' };
     return {
-      id: 'knock', focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
+      id: 'knock', facts: { where, mx, events: ev.length, iatF: d.iat ? toF(mean(pick(d.iat, idx))) : null, single: ev.every(e => e.idx.length <= 2) }, focusT: [d.t[ev[0].start] - 10, d.t[ev[0].end] + 10], sev, title: 'Knock detected', short: `Up to ${mx.toFixed(1)}° of timing pulled${where ? ' around ' + where.split(' / ')[0] : ''}.`,
       found,
       why: 'Knock is fuel exploding instead of burning smoothly. The ECU protects the engine by pulling timing, which costs power. Repeated or heavy knock can damage pistons, ring lands and rod bearings.',
       fixes: [
@@ -429,7 +451,7 @@ const Core = (() => {
     found.push(`${Math.round(share * 100)}% of full-throttle time was leaner than 13.2${leanStart ? `, starting around ${leanStart} rpm` : ''}.`);
     found.push(`Found ${pulls.length} full-throttle pull${pulls.length > 1 ? 's' : ''}. The graph zooms in on the worst one.`);
     return {
-      id: 'lean', focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR hit ${mx.toFixed(1)} under load. Safe target is about 12.5–13.0.`,
+      id: 'lean', facts: { mx, leanStart, risesWithRpm: !!(d.rpm && leanStart && leanStart > 4000) }, focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR hit ${mx.toFixed(1)} under load. Safe target is about 12.5–13.0.`,
       found,
       why: 'A lean mixture under load burns hotter. It raises cylinder and exhaust temperatures and makes knock much more likely. Naturally aspirated engines are usually safe around 12.5–13.0 AFR at full throttle.',
       fixes: [
@@ -479,7 +501,20 @@ const Core = (() => {
     const pos = worstVal > 0;
     const found = [`Average total fuel trim (short + long term): <b>${sgn(overall)}%</b>.`];
     if (worst) found.push(`Worst area: <b>${lab(worst)}</b> ${axis === 'maf' ? 'MAF' : ''} at ${sgn(worst.m)}%. The ECU is ${pos ? 'adding' : 'removing'} that much fuel to fix the mixture.`);
-    found.push(pos ? 'Positive trims mean the engine runs lean before correction. Usually the MAF is under-reading airflow in that range, or there is a vacuum leak.' : 'Negative trims mean the engine runs rich before correction. Usually the MAF is over-reading airflow in that range, or injector data is off.');
+    found.push(pos ? 'Positive trims mean the engine runs lean before the ECU corrects it: either more air is getting in than was measured, or less fuel is arriving than expected.' : 'Negative trims mean the engine runs rich before the ECU corrects it: either extra fuel is getting in, or less air than was measured.');
+    let pattern = 'all';
+    if (rows.length >= 3) {
+      const k = Math.max(1, Math.floor(rows.length / 3));
+      const lowM = mean(rows.slice(0, k).map(r => r.m)), highM = mean(rows.slice(-k).map(r => r.m));
+      if (Math.abs(lowM) >= 5 && Math.abs(highM) < Math.abs(lowM) / 2) pattern = 'low';
+      else if (Math.abs(highM) >= 5 && Math.abs(lowM) < Math.abs(highM) / 2) pattern = 'high';
+      else if (Math.abs(lowM) >= 3 && Math.abs(highM) >= 3 && Math.sign(lowM) === Math.sign(highM)) pattern = 'all';
+      else pattern = 'mid';
+    }
+    if (pattern === 'low') found.push('The correction is biggest at low airflow (idle and light cruise) and shrinks as airflow rises.');
+    else if (pattern === 'high') found.push('The correction grows as airflow rises.');
+    else if (pattern === 'all') found.push('The correction is similar across the whole airflow range.');
+    else found.push('The correction is concentrated in a middle band of airflow.');
     const res = {
       id: 'trims', sev, title: `Fuel trims ${pos ? 'positive (lean)' : 'negative (rich)'}`, short: `ECU is correcting fuel by ${sgn(worstVal)}%${worst ? ` at ${lab(worst)}` : ''}. Normal is within ±5%.`,
       found,
@@ -495,7 +530,7 @@ const Core = (() => {
       ],
       chart: { type: 'bar', labels: rows.map(r => r.b.toFixed(dec)), values: rows.map(r => r.m), band: 5, ylabel: 'Total trim (%)', xlabel: axis === 'maf' ? `MAF (${unit.trim()}) bin start` : 'RPM bin start' },
     };
-    if (axis === 'maf' && rows.length) res.table = { head: ['MAF range', 'Samples', 'Avg trim', 'Suggested change'], rows: rows.map(r => [lab(r), r.n, `${sgn(r.m)}%`, Math.abs(r.m) < 2 ? 'Leave as is' : `${sgn(r.m)}% airflow`]) };
+    res.facts = { pos, pattern, axis, overall, worstVal, worstLab: worst ? lab(worst) : null, rows: rows.map(r => ({ lab: lab(r), n: r.n, m: r.m })) };
     return res;
   }
 
@@ -512,7 +547,7 @@ const Core = (() => {
     const m = median(pick(d.afr, idx));
     if (m >= 14.1) return { sev: 'ok', title: 'Cruise mixture on target', short: `Median AFR while cruising: ${m.toFixed(1)}. That is right where it should be for economy.` };
     return {
-      id: 'cruise', sev: 'warn', title: 'Rich while cruising', short: `Median cruise AFR is ${m.toFixed(1)}. Should be about 14.7.`,
+      id: 'cruise', facts: { m }, sev: 'warn', title: 'Rich while cruising', short: `Median cruise AFR is ${m.toFixed(1)}. Should be about 14.7.`,
       found: [`While cruising (1,500–3,800 rpm, part throttle), the median air/fuel ratio was <b>${m.toFixed(1)}</b>.`, `That burns roughly ${Math.round((14.7 / m - 1) * 100)}% more fuel than a 14.7 mixture for the same air.`],
       why: 'At steady cruise a gasoline engine should sit near 14.7 (stoichiometric). Running richer than that wastes fuel and can foul plugs. It usually means the ECU is in open loop, the coolant is not fully warm, or the open-loop fuel table reaches into cruise areas.',
       fixes: ['Check that the engine was fully warm. A cold engine adds fuel on purpose.', 'Look at the open-loop / closed-loop switch thresholds in the tune. If cruise load triggers open loop, raise the threshold.', 'Make sure the upstream O2 sensor is working, so the ECU can stay in closed loop.'],
@@ -533,7 +568,7 @@ const Core = (() => {
     const chart = { type: 'line', x: d.t, series: [{ y: d.iat.map(v => v == null ? null : toF(v)), cls: 'warn', name: 'Intake air (°F)' }], hlines: [{ y: toF(55), cls: 'crit', label: '131°F' }], ylabel: 'Intake air (°F)' };
     if (d.speed) { chart.series.push({ y: d.speed, cls: 's2', name: `Speed (${d.units.speed})`, axis: 'r' }); chart.y2label = `Speed (${d.units.speed})`; }
     return {
-      id: 'iat', sev, title: idleHot ? 'Intake heat soak' : 'Hot intake air', short: `Intake air reached ${fmtT(mx)}${idleHot ? ', mostly while stopped' : ''}.`,
+      id: 'iat', facts: { idleHot, mxF: toF(mx) }, sev, title: idleHot ? 'Intake heat soak' : 'Hot intake air', short: `Intake air reached ${fmtT(mx)}${idleHot ? ', mostly while stopped' : ''}.`,
       found,
       why: 'Hot intake air is less dense, so each cylinder gets less oxygen and makes less power. The ECU also pulls timing on hot air to avoid knock. A common rule of thumb is about 1% power lost for every 10°F of extra intake temperature.',
       fixes: [
@@ -553,14 +588,14 @@ const Core = (() => {
     const mx = maxOf(d.ect), wm = median(pick(d.ect, warm));
     const chart = { type: 'line', x: d.t, series: [{ y: d.ect.map(v => v == null ? null : toF(v)), cls: 's1', name: 'Coolant (°F)' }], hlines: [{ y: toF(103), cls: 'crit', label: '217°F' }, { y: toF(80), cls: 'warn', label: '176°F' }], ylabel: 'Coolant (°F)' };
     if (mx >= 103) return {
-      id: 'ect', sev: mx >= 108 ? 'crit' : 'warn', title: 'Engine running hot', short: `Coolant reached ${fmtT(mx)}.`,
+      id: 'ect', facts: { kind: 'hot' }, sev: mx >= 108 ? 'crit' : 'warn', title: 'Engine running hot', short: `Coolant reached ${fmtT(mx)}.`,
       found: [`Coolant temperature peaked at <b>${fmtT(mx)}</b>. A healthy engine usually sits between 190 and 205°F (88–96°C).`],
       why: 'When the engine runs hot, the ECU pulls timing and adds fuel to protect itself, so you lose power and economy. Sustained overheating can warp the cylinder head or blow the head gasket.',
       fixes: ['Check coolant level and burp air out of the system.', 'Confirm the radiator fan turns on at the right temperature.', 'Inspect the radiator for blockage and the water pump for leaks or noise.'],
       chart,
     };
     if (warm.length > 50 && wm < 80) return {
-      id: 'ect', sev: 'warn', title: 'Engine not reaching temperature', short: `Coolant stayed around ${fmtT(wm)} after warm-up.`,
+      id: 'ect', facts: { kind: 'cold' }, sev: 'warn', title: 'Engine not reaching temperature', short: `Coolant stayed around ${fmtT(wm)} after warm-up.`,
       found: [`After the first few minutes, coolant sat around <b>${fmtT(wm)}</b>. A warm engine normally sits between 190 and 205°F (88–96°C).`],
       why: 'A cold engine runs rich on purpose (warm-up enrichment) and burns noticeably more fuel. A thermostat stuck open is a common cause of a sudden drop in mpg.',
       fixes: ['Replace the thermostat if the engine takes a long time to warm up or cools down on the highway.', 'Compare the logged coolant reading with a separate gauge to rule out a bad sensor.', 'Start the log after the engine is fully warm so the other checks are accurate.'],
@@ -606,7 +641,7 @@ const Core = (() => {
     if (!bad && !underRepeats) return { sev: 'ok', title: 'Idle is steady', short: `Warm idle ${Math.round(med)} rpm, varying ±${Math.round(spread)} rpm.${underNote}` };
     const chart = { type: 'line', x: d.t, series: [{ y: d.rpm, cls: 's1', name: 'Engine RPM' }], yDomain: [Math.max(0, rnd(med - 500, 100)), rnd(med + 500, 100)], hlines: [{ y: med - 150, cls: 'warn', label: '−150 rpm' }], ylabel: 'RPM' };
     if (!bad) return {
-      id: 'idle', sev: 'warn', title: 'Big dip when returning to idle', short: `RPM drops to ${Math.round(worstUnder)} before settling at ${Math.round(med)}. Stall risk.`,
+      id: 'idle', facts: { kind: 'under' }, sev: 'warn', title: 'Big dip when returning to idle', short: `RPM drops to ${Math.round(worstUnder)} before settling at ${Math.round(med)}. Stall risk.`,
       found: [`Steady warm idle is fine: ${Math.round(med)} rpm, varying ±${Math.round(spread)} rpm.`, `When you come to a stop, RPM undershoots to <b>${Math.round(worstUnder)} rpm</b> before recovering. ${bigUnder.length} of ${undershoots.length} stops dipped more than 200 rpm.`],
       why: 'When you lift off and the clutch goes in, the ECU has to catch the falling RPM with extra idle air. If it catches too late, RPM dips hard and the engine can stall. This is an idle-control calibration issue, not a misfire.',
       fixes: ['Increase the throttle follower or dashpot (return-to-idle airflow) in the tune so RPM drops more gently.', 'If you rescaled the MAF at low airflow, re-check idle airflow and idle fuel trims.', 'Clean the throttle body, since carbon buildup reduces the air the ECU can let in at idle.'],
@@ -616,7 +651,7 @@ const Core = (() => {
     if (dips) found.push(`${dips} dip${dips > 1 ? 's' : ''} of more than 150 rpm during steady idle.`);
     if (mis) found.push(`The ECU counted <b>${Math.round(mis)} misfire${mis > 1 ? 's' : ''}</b> during the log.`);
     return {
-      id: 'idle', sev: mis > 20 ? 'crit' : 'warn', title: mis ? 'Misfires detected' : 'Rough idle', short: mis ? `${Math.round(mis)} misfires counted.` : `Warm idle varies by ±${Math.round(spread)} rpm${dips ? ` with ${dips} dips` : ''}.`,
+      id: 'idle', facts: { kind: mis ? 'misfire' : 'rough' }, sev: mis > 20 ? 'crit' : 'warn', title: mis ? 'Misfires detected' : 'Rough idle', short: mis ? `${Math.round(mis)} misfires counted.` : `Warm idle varies by ±${Math.round(spread)} rpm${dips ? ` with ${dips} dips` : ''}.`,
       found,
       why: 'A smooth idle is a quick engine health check. Dips and hunting while stopped usually mean a misfire, a vacuum leak, or an idle airflow problem.',
       fixes: ['Check spark plugs, coils and their connectors. A loose connector can cause a misfire that comes and goes.', 'Smoke-test for vacuum leaks, especially after intake work.', 'Clean the throttle body. If you changed the intake or MAF scaling, re-check the idle airflow tables.'],
@@ -655,6 +690,112 @@ const Core = (() => {
     const missing = WANT.filter(([k]) => k === 'stft' ? !d.stft && !d.ltft : k === 'load' ? !d.load && !d.tps : !d[k]).map(([, l, why]) => ({ label: l, why }));
     return { issues, passed, skipped, missing };
   }
+
+  // ---------- setup-aware suggestions ----------
+  // Suggestions depend on what the car has. Hardware and sensor causes come first; tune changes only after.
+  const SETUP = [
+    { key: 'intake', label: 'Intake and MAF housing', opts: [['stock', 'Stock'], ['modified', 'Aftermarket or modified']] },
+    { key: 'injectors', label: 'Injectors', opts: [['stock', 'Stock'], ['upgraded', 'Upgraded']] },
+    { key: 'engine', label: 'Engine', opts: [['stock', 'Original, stock'], ['modified', 'Swapped or modified']] },
+    { key: 'octane', label: 'Fuel', opts: [['unknown', 'Not sure'], ['87', '87'], ['91', '91'], ['93', '93']] },
+  ];
+
+  function advise(issue, setup) {
+    const f = issue.facts || {}, S = Object.assign({ intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown' }, setup || {});
+    const allStock = S.intake === 'stock' && S.injectors === 'stock';
+    const a = { note: '', check: [], tune: [], noTune: '', table: null };
+    const injCheck = 'Confirm the injector size and latency (dead time) in the tune match the injectors you installed. Wrong injector data throws fueling off everywhere, and no other table change will fix it.';
+
+    switch (issue.id) {
+      case 'trims': {
+        const head = ['Airflow range', 'Samples', 'Avg trim'];
+        if (S.intake === 'modified') {
+          a.note = 'You have a modified intake, so the factory MAF calibration probably no longer matches your airflow. Rescaling the MAF is the right fix once leaks are ruled out.';
+          if (S.injectors === 'upgraded') a.check.push(injCheck);
+          a.check.push('Smoke-test for leaks first, especially every joint on the new intake between the MAF and the throttle body.');
+          if (f.axis === 'maf') {
+            a.tune.push('Rescale the MAF table with the corrections below: change the airflow value at each voltage breakpoint by the percentage shown.');
+            a.table = { head: [...head, 'Suggested change'], rows: f.rows.map(r => [r.lab, r.n, `${sgnS(r.m)}%`, Math.abs(r.m) < 2 ? 'Leave as is' : `${sgnS(r.m)}% airflow`]) };
+          } else a.tune.push('Log MAF voltage too, so this tool can give a correction for each MAF breakpoint.');
+          a.tune.push('After flashing, reset fuel trims, drive 20 minutes of mixed roads, and re-log. Repeat until every range is within ±3%.');
+          break;
+        }
+        a.note = 'Your intake is stock, so the factory MAF calibration already matches your airflow path. Do not rescale the MAF to chase these trims. That hides the real fault and makes fueling wrong somewhere else.';
+        if (S.injectors === 'upgraded') a.check.push(injCheck);
+        if (f.pos) {
+          if (f.pattern === 'low') a.check.push('Trims are highest at idle and light cruise and shrink as airflow rises. That is the classic vacuum-leak pattern, because a small leak is a large share of the air at idle. Smoke-test the intake: vacuum hoses, PCV hose, brake booster line, intake manifold gasket, and the boot between the MAF and throttle body.');
+          else if (f.pattern === 'high') a.check.push('Trims grow as airflow rises. That points to fuel delivery not keeping up: check fuel pressure, the fuel filter and the pump.');
+          else a.check.push('Clean the MAF sensor element with MAF cleaner. A dirty sensor under-reads airflow across the range.');
+          a.check.push('Look for an exhaust leak ahead of the upstream O2 sensor. A leak pulls in outside air and makes the sensor read lean.');
+          if (f.pattern !== 'high') a.check.push('Check fuel pressure and the fuel filter.');
+          if (f.pattern === 'low') a.check.push('Clean the MAF sensor element with MAF cleaner.');
+        } else {
+          a.check.push('Negative trims on a stock intake usually mean extra fuel is getting in. Check for a leaking injector, fuel pressure that is too high, and a purge (EVAP) valve stuck open.');
+          a.check.push('Check the upstream O2 sensor. A slow or failing sensor can cause trims to drift.');
+          a.check.push('Clean the MAF sensor element with MAF cleaner. Some contamination makes the sensor over-read.');
+        }
+        if (S.engine === 'modified') a.check.push('On a swapped or modified engine, check that any engine-specific settings in the tune, such as injector data, match the parts actually installed.');
+        a.noTune = 'Change the tune only if all the checks come back clean and trims stay above ±5% after a trim reset and a 20-minute drive. In that case, ask for help on the forum with your log before touching the MAF table.';
+        if (f.rows && f.rows.length) a.table = { head, rows: f.rows.map(r => [r.lab, r.n, `${sgnS(r.m)}%`]), caption: 'Where the correction happens' };
+        break;
+      }
+      case 'knock': {
+        if (S.octane === '87') a.check.push('You are running 87. If your tune was built for premium fuel, that alone explains the knock. Go back to 91–93 and re-log before changing the tune.');
+        else if (S.octane === 'unknown') a.check.push('Confirm the fuel octane matches what the tune was built for. A tune made for premium will knock on 87.');
+        if (f.iatF != null && f.iatF > 120) a.check.push(`Intake air was about ${Math.round(f.iatF)}°F when it knocked. Bring intake temperature down first, then re-log.`);
+        if (f.single) a.check.push('Every event was a single short blip. That is often false knock from mechanical noise. Check for loose heat shields, exhaust hangers and a loose knock sensor bolt before pulling timing.');
+        a.check.push('Check the spark plugs: correct type and gap, and no heavy carbon.');
+        a.tune.push(f.where ? `If knock repeats in the same place after those checks, remove 1–2° from the ignition timing table around ${f.where}, flash, and re-log the same pull. Repeat in small steps.` : 'If knock repeats in the same place after those checks, remove 1–2° from the ignition timing table where it happened, flash, and re-log.');
+        if (S.engine === 'modified') a.tune.push('On a swapped or modified engine, the original engine\'s timing may simply be too aggressive. Work up from conservative timing instead of starting from the original map.');
+        break;
+      }
+      case 'lean': {
+        if (allStock && S.engine === 'stock') a.note = 'On a fully stock car, factory full-throttle fueling is normally rich and safe. A lean reading here is more likely a sensor or fuel-delivery problem than a tune problem.';
+        if (S.injectors === 'upgraded') a.check.push(injCheck);
+        a.check.push('Rule out a false reading: do a free-air calibration on the wideband and check for exhaust leaks ahead of the sensor.');
+        a.check.push(f.risesWithRpm ? 'The lean starts high in the rev range, which points at fuel delivery. Check fuel pressure under load, the fuel filter and the pump.' : 'Check fuel pressure under load, the fuel filter and the pump.');
+        a.tune.push(`If the checks pass, add fuel in the full-throttle (open-loop) fuel or target AFR table${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the wideband reads about 12.6–12.8.`);
+        break;
+      }
+      case 'cruise': {
+        a.check.push('Make sure the engine was fully warm. A cold engine adds fuel on purpose.');
+        a.check.push('Check the upstream O2 sensor. If it is slow or dead, the ECU cannot hold 14.7.');
+        a.check.push('Check for a leaking injector or fuel pressure that is too high.');
+        a.tune.push('If the hardware is fine and your tune has been changed, check the switch point between closed loop and open loop. If cruise load triggers open loop, the tune is running rich there on purpose.');
+        break;
+      }
+      case 'iat': {
+        a.check.push('Shield or insulate heat sources near the intake, especially the exhaust manifold or header.');
+        a.check.push('Seal the airbox so it breathes outside air instead of engine-bay air.');
+        a.check.push('Compare logs before and after a fix on the same route at a similar outside temperature.');
+        a.noTune = 'No tune change needed. Hot intake air is a hardware problem, and the ECU already protects the engine by pulling timing.';
+        break;
+      }
+      case 'ect': {
+        if (f.kind === 'hot') { a.check.push('Check the coolant level and bleed air out of the system.'); a.check.push('Confirm the radiator fan turns on.'); a.check.push('Inspect the radiator for blockage and the water pump for leaks.'); }
+        else { a.check.push('Replace the thermostat if the engine is slow to warm up or cools down on the highway. A thermostat stuck open is a common cause of a sudden drop in mpg.'); a.check.push('Compare the logged coolant reading with a separate gauge to rule out a bad sensor.'); }
+        a.noTune = 'No tune change needed. This is a cooling-system problem.';
+        break;
+      }
+      case 'idle': {
+        if (f.kind === 'under') {
+          if (allStock) a.note = 'With a stock intake and throttle body, the factory idle settings normally handle coming to a stop. Check the hardware first.';
+          a.check.push('Clean the throttle body. Carbon buildup reduces the air the ECU can let in at idle.');
+          a.check.push('Smoke-test for vacuum leaks.');
+          a.check.push('Notice how you come to a stop. Rolling out the clutch with no throttle can cause a one-off dip that is not a tune problem.');
+          a.tune.push('If the dip still happens on most stops after cleaning, slightly increase the return-to-idle airflow (dashpot or throttle follower) in the tune.');
+        } else {
+          a.check.push('Check the spark plugs, coils and their connectors. A loose connector can cause a misfire that comes and goes.');
+          a.check.push('Smoke-test for vacuum leaks.');
+          a.check.push('Clean the throttle body.');
+          a.noTune = 'Usually no tune change needed. A rough idle or misfire is almost always a hardware problem.';
+        }
+        break;
+      }
+    }
+    return a;
+  }
+  const sgnS = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1);
 
   // ---------- example log ----------
   function sample() {
@@ -697,7 +838,7 @@ const Core = (() => {
     return { headers: H, cols, n: cols[0].length };
   }
 
-  return { FIELDS, parseCSV, detect, build, analyze, sample, toF, mean, maxOf };
+  return { FIELDS, parseCSV, detect, build, analyze, sample, advise, SETUP, toF, mean, maxOf };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
 
@@ -777,13 +918,37 @@ if (typeof module !== 'undefined') module.exports = Core;
       : `<span class="badge">Your log</span><span><b>${esc(src.name)}</b> · ${P.n.toLocaleString('en-US')} rows · ${channels().length} channels</span><button class="linkbtn" id="ex" type="button">Show the example log</button>`;
     const ex = $('#ex'); if (ex) ex.onclick = () => load(Core.sample(), { example: true });
   }
+  // car setup (per-viewer convenience, kept in this browser only)
+  let setup = { intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown' };
+  try { const v = JSON.parse(localStorage.getItem('eld-setup') || 'null'); if (v && typeof v === 'object') setup = Object.assign(setup, v); } catch (e) { }
+  const saveSetup = () => { try { localStorage.setItem('eld-setup', JSON.stringify(setup)); } catch (e) { } };
+  const openNotes = new Set();
+
+  function adviceHtml(i) {
+    const a = Core.advise(i, setup);
+    const list = (h, items) => items.length ? `<div><h4>${h}</h4><ol>${items.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>` : '';
+    const tbl = a.table ? `<div><h4>${esc(a.table.caption || 'Suggested MAF correction')}</h4><div class="tablewrap"><table><thead><tr>${a.table.head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${a.table.rows.map(r => `<tr>${r.map((c, k) => `<td${k === 3 && !/Leave/.test(c) ? ' class="fix"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>` : '';
+    return `${i.why ? `<p>${esc(i.why)}</p>` : ''}
+      ${a.note ? `<p class="anote">${esc(a.note)}</p>` : ''}
+      ${list('Check first', a.check)}
+      ${list('If the checks pass', a.tune)}
+      ${a.noTune ? `<p class="notune">${esc(a.noTune)}</p>` : ''}
+      ${tbl}`;
+  }
+
   function renderNotes() {
     const is = AN.issues, ok = AN.passed;
     $('#notes').innerHTML = `
       <div class="notes-head"><h2>${is.length ? `${is.length} thing${is.length > 1 ? 's' : ''} worth a look` : 'Nothing stood out'}</h2><p>Automatic flags. Open one to see the graphs behind it and judge for yourself.</p></div>
-      ${is.length ? `<div class="nlist">${is.map((i, k) => `<div class="note"><span class="dot ${i.sev}"></span><strong>${esc(i.title)}</strong><p>${esc(i.short)}</p>${i.chans ? `<button type="button" data-k="${k}">Show in graphs</button>` : ''}</div>`).join('')}</div>` : ''}
-      ${ok.length ? `<p class="okline"><span class="dot ok"></span> Looked normal: ${ok.map(o => `<b>${esc(o.title)}</b>`).join(', ')}.</p>` : ''}`;
+      <div class="setup"><span class="setup-t">Your car</span>${Core.SETUP.map(f => `<label for="su-${f.key}">${esc(f.label)}<select id="su-${f.key}" data-k="${f.key}">${f.opts.map(([v, l]) => `<option value="${v}"${setup[f.key] === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`).join('')}<p>Suggestions change with your setup. Hardware causes come first, tune changes last.</p></div>
+      ${is.length ? `<div class="nlist">${is.map((i, k) => `<div class="note"><span class="dot ${i.sev}"></span><strong>${esc(i.title)}</strong><p>${esc(i.short)}</p>
+        <div class="nact">${i.chans ? `<button type="button" data-k="${k}">Show in graphs</button>` : ''}</div>
+        <details class="advice" data-id="${i.id}"${openNotes.has(i.id) ? ' open' : ''}><summary>What to check and change</summary><div class="abody">${adviceHtml(i)}</div></details></div>`).join('')}</div>` : ''}
+      ${ok.length ? `<p class="okline"><span class="dot ok"></span> Looked normal: ${ok.map(o => `<b>${esc(o.title)}</b>`).join(', ')}.</p>` : ''}
+      <p class="okline">These suggestions are a starting point, not a tune. Change one thing at a time and re-log the same conditions.</p>`;
     document.querySelectorAll('#notes button[data-k]').forEach(b => b.onclick = () => focus(is[+b.dataset.k]));
+    document.querySelectorAll('#notes details.advice').forEach(d => d.ontoggle = () => { if (d.open) openNotes.add(d.dataset.id); else openNotes.delete(d.dataset.id); });
+    document.querySelectorAll('#notes .setup select').forEach(sel => sel.onchange = () => { setup[sel.dataset.k] = sel.value; saveSetup(); renderNotes(); const el = document.getElementById(sel.id); if (el) el.focus(); });
   }
   function focus(issue) {
     const cs = (issue.chans || []).map(colOf).filter(j => j != null);

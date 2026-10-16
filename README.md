@@ -16,6 +16,7 @@ Your log never leaves your computer. Everything runs in your browser. Nothing is
 - **Channel picker.** Choose which columns to show, with quick groups for Fuel, Ignition, Temps and Driving.
 - **Relationships.** Plot any channel against another, colored by a third, and see which channels move most closely together.
 - **Automatic flags.** Knock, lean at full throttle, fuel trims, rich cruise, intake heat soak, coolant temperature and idle quality. Each flag jumps the graphs to the moment it found.
+- **Setup-aware suggestions.** Tell it your intake, injectors, engine and fuel. Each flag then lists hardware and sensor checks first, and tune changes only after those. On a stock intake it will not tell you to rescale the MAF.
 
 The flags are automatic and can be wrong. Always confirm in the graphs before changing a tune.
 

@@ -24,6 +24,7 @@ The whole tool is a single file, `index.html`, with no build step and no librari
 - **`Core.FIELDS`**: how column names are recognized. Add patterns here to support a new logging tool.
 - **`Core.build`**: unit handling (°F/°C, lambda/AFR, 0–1 vs 0–100 %).
 - **The check functions** (`knock`, `lean`, `trims`, `cruise`, `iat`, `ect`, `idle`): the automatic flags and their limits.
+- **`advise`**: the suggestions shown under each flag, based on the car setup. Table names are kept generic on purpose. If you know the exact table names in RomDrop, VersaTuner or NC Flash, please add them, with a source.
 - **`Core.sample`**: the built-in example log.
 - **The app section** after `Core`: graphs, channel picker and the relationship view.
 
