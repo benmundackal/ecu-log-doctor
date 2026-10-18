@@ -353,6 +353,16 @@ const Core = (() => {
       d.units[k] = isF ? '°F' : '°C';
     }
     for (const k of ['afr', 'afrTarget']) if (d[k] && median(d[k]) < 3) { d[k] = d[k].map(v => v == null ? null : v * 14.7); d.units.lambda = true; }
+    // A wideband set to the E85 scale reads about 9.8 at stoichiometric instead of 14.7.
+    // Convert it to gasoline-equivalent AFR (same lambda) so every check uses one set of limits.
+    if (d.afr && !d.units.lambda) {
+      const mid = median(d.afr.filter(v => v != null && v > 6 && v < 18));
+      if (mid >= 9.0 && mid <= 10.6) {
+        const k = 14.7 / 9.765;
+        for (const c of ['afr', 'afrTarget']) if (d[c]) d[c] = d[c].map(v => v == null ? null : v * k);
+        d.units.e85Scale = true;
+      }
+    }
     for (const k of ['stft', 'ltft', 'load', 'tps']) if (d[k] && maxOf(d[k].map(v => v == null ? null : Math.abs(v))) <= 1.5) d[k] = d[k].map(v => v == null ? null : v * 100);
     if (d.knock) d.knock = d.knock.map(v => v == null ? null : Math.abs(v));
     if (d.maf) d.units.mafVolt = maxOf(d.maf) <= 5.5 && /volt|\(v\)|\bv\b/.test(H('maf')) || maxOf(d.maf) <= 5.2;
@@ -791,6 +801,7 @@ const Core = (() => {
   function analyze(d) {
     d.wot = wotMask(d);
     const res = [knock, lean, loadcap, hle, fuelcut, trims, cruise, iat, ect, idle].map(f => f(d)).filter(Boolean);
+    if (d.units.e85Scale) res.push({ sev: 'ok', title: 'Wideband read on the E85 scale', short: 'Air/fuel readings were converted to the gasoline scale (14.7 = stoichiometric) so every check uses the same limits.' });
     const order = { crit: 0, warn: 1, ok: 2, skip: 3 };
     const issues = res.filter(r => r.sev === 'crit' || r.sev === 'warn').sort((a, b) => order[a.sev] - order[b.sev]);
     const FOCUS = {
@@ -818,7 +829,7 @@ const Core = (() => {
     { key: 'intake', label: 'Intake and MAF housing', opts: [['stock', 'Stock'], ['modified', 'Aftermarket or modified']] },
     { key: 'injectors', label: 'Injectors', opts: [['stock', 'Original for this engine'], ['upgraded', 'Upgraded']] },
     { key: 'engine', label: 'Engine', opts: [['stock', 'Original, stock'], ['swap', 'Swapped (e.g. 2.5 MZR)'], ['modified', 'Modified internals']] },
-    { key: 'octane', label: 'Fuel', opts: [['unknown', 'Not sure'], ['87', '87'], ['91', '91'], ['93', '93']] },
+    { key: 'octane', label: 'Fuel', opts: [['unknown', 'Not sure'], ['87', '87 (US)'], ['91', '91 (US)'], ['93', '93 (US)'], ['ron95', '95 RON (Europe)'], ['ron98', '98 RON (Europe)'], ['e85', 'E85 (ethanol)']] },
     { key: 'software', label: 'Tuning software', opts: [['other', 'Other or not sure'], ['versatuner', 'VersaTuner (NC Miata)'], ['romdrop', 'RomDrop (NC Miata)'], ['ncflash', 'NC Flash']] },
   ];
 
@@ -856,6 +867,7 @@ const Core = (() => {
     switch (issue.id) {
       case 'trims': {
         const head = ['Airflow range', 'Samples', 'Avg trim'];
+        if (S.octane === 'e85') a.check.push('On E85, check the tune is set up for ethanol. If it was written for gasoline, the ECU has to add about 30–40% fuel through trims, and trims will also shift whenever the ethanol content of your fill-up changes.');
         const worstRow = f.rows && f.rows.length ? f.rows.reduce((w, r) => Math.abs(r.m) > Math.abs(w.m) ? r : w) : null;
         const thin = worstRow && worstRow.n < 100;
         if (S.intake === 'modified') {
@@ -898,7 +910,9 @@ const Core = (() => {
       case 'knock': {
         const warmUp = f.coldShare != null && f.coldShare >= 0.7 && f.ectF != null;
         if (S.octane === '87') a.check.push('You are running 87. If your tune was built for premium fuel, that alone explains the knock. Go back to 91–93 and re-log before changing the tune.');
-        else if (S.octane === 'unknown') a.check.push('Confirm the fuel octane matches what the tune was built for. A tune made for premium will knock on 87.');
+        else if (S.octane === 'ron95') a.check.push('You are running 95 RON, which is about the same as 91 in the US. Many tunes are written for US 93, which is about 98 RON. If yours was, switch to 98 and re-log before changing the tune.');
+        else if (S.octane === 'e85') a.check.push('E85 resists knock very well, so knock on E85 is unusual. The real ethanol content of pump E85 changes with season and country, and can be much lower than 85%. Check it with an ethanol tester before changing the tune. Also check for false knock from mechanical noise.');
+        else if (S.octane === 'unknown') a.check.push('Confirm the fuel octane matches what the tune was built for. A tune made for premium will knock on regular fuel. US pump numbers read about 4 lower than European RON: US 91 is about 95 RON, and US 93 is about 98 RON.');
         if (warmUp) {
           a.note = `Most of this knock happened before the engine was fully warm (coolant about ${Math.round(f.ectF)}°F).${f.warmClean >= 30 ? ` This log also has ${Math.round(f.warmClean)} s at the same rpm and load with warm coolant and no knock.` : ''} That points at a warm-up condition, not the main timing map.`;
           a.check.push('Make sure it repeats. Log a few more drives that start cold and go straight onto the same road. One drive is not a pattern.');
@@ -923,7 +937,8 @@ const Core = (() => {
         if (S.injectors === 'upgraded' || swap) a.check.push(injCheck);
         a.check.push('Rule out a false reading. Check for exhaust leaks ahead of the O2 sensor. If you use an add-on wideband, do its free-air calibration.');
         a.check.push(f.risesWithRpm ? 'The lean starts high in the rev range, which points at fuel delivery. Check fuel pressure under load, the fuel filter and the pump.' : 'Check fuel pressure under load, the fuel filter and the pump.');
-        a.tune.push(`If the checks pass, add fuel in ${nm('wotAfr', sw)}${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the mixture reads about 12.5–12.8 AFR (λ 0.85–0.87).`);
+        if (S.octane === 'e85') a.check.push('E85 needs about 30–40% more fuel than gasoline. Check that your injectors and fuel pump can supply it. Stock parts often run out near redline on E85.');
+        a.tune.push(`If the checks pass, add fuel in ${nm('wotAfr', sw)}${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the mixture reads about 12.5–12.8 AFR (λ 0.85–0.87)${S.octane === 'e85' ? '. On a wideband set to the E85 scale that shows as about 8.3–8.5' : ''}.`);
         if (f.risesWithRpm) a.tune.push(`Also check ${nm('hle', sw)}. It leans the mixture at high rpm and load on purpose.`);
         a.noTune = 'Stay out of full throttle until this is fixed. Lean and loaded is how engines break.';
         break;
