@@ -260,18 +260,19 @@ const Core = (() => {
     { key: 'rpm', label: 'Engine RPM', re: [/\brpm\b|engine speed/] },
     { key: 'load', label: 'Engine load', re: [/load/] },
     { key: 'maf', label: 'MAF (voltage or g/s)', re: [/maf|mass air/] },
-    { key: 'stft', label: 'Short-term fuel trim', re: [/stft|short.?term|\bst.?ft|short trim/] },
-    { key: 'ltft', label: 'Long-term fuel trim', re: [/ltft|long.?term|\blt.?ft|long trim/] },
+    { key: 'stft', label: 'Short-term fuel trim', re: [/stft|short.?term|\bst.?ft|short trim|shrt_?ft|short_?ft/] },
+    { key: 'ltft', label: 'Long-term fuel trim', re: [/ltft|long.?term|\blt.?ft|long trim|long_?ft/] },
     { key: 'knock', label: 'Knock retard', re: [/knock|\bkr\b|ign\w*.*corr|timing.*corr|spark.*corr/] },
-    { key: 'timing', label: 'Ignition timing', re: [/timing|ign\w*.*adv|spark adv|ignition/], not: /corr|knock|valve|\bcam\b|vvt|vct/ },
-    { key: 'afrTarget', label: 'Target AFR', re: [/(target|command|desired|cmd).*(afr|lambda|air.?fuel|equiv)|(afr|lambda|air.?fuel).*(target|command|desired)/] },
-    { key: 'afr', label: 'Air/fuel ratio (wideband)', re: [/wideband|\bwb\b|afr|air.?fuel|lambda|equiv/], not: /target|command|desired|cmd/ },
+    { key: 'timing', label: 'Ignition timing', re: [/timing|ign\w*.*adv|spark ?adv|ignition/], not: /corr|knock|valve|\bcam\b|vvt|vct/ },
+    { key: 'afrTarget', label: 'Target AFR', re: [/(target|command|desired|cmd).*(afr|lambda|air.?fuel|equiv)|(afr|lambda|air.?fuel).*(target|command|desired)|eq_?ratio_?(dsd|des|cmd|tgt)/] },
+    { key: 'afr', label: 'Air/fuel ratio (wideband)', re: [/wideband|\bwb\b|afr|air.?fuel|lambda|equiv|eq_?ratio/], not: /target|command|desired|cmd|dsd/ },
     { key: 'iat', label: 'Intake air temp', re: [/\biat\b|intake air temp|intake temp|air temp/], not: /ambient|outside|baro/ },
     { key: 'ect', label: 'Coolant temp', re: [/\bect\b|coolant|engine temp|water temp/] },
-    { key: 'tps', label: 'Throttle position', re: [/tps|throttle|pedal|accel/] },
+    { key: 'tps', label: 'Throttle position', re: [/tps|throttle|pedal|accel|\bapp\b/] },
     { key: 'speed', label: 'Vehicle speed', re: [/vehicle speed|\bvss\b|\bspeed\b|\bmph\b|km\/h/], not: /engine/ },
     { key: 'misfire', label: 'Misfire count', re: [/misfire|mis-fire/] },
-    { key: 'fuelStatus', label: 'Fuel system status (open/closed loop)', re: [/fuel ?sys\w* ?status|loop status/] },
+    { key: 'fuelStatus', label: 'Fuel system status (open/closed loop)', re: [/fuel ?sys\w* ?status|loop status|^fuel_?sys$/] },
+    { key: 'ethanol', label: 'Ethanol content / flex blend (%)', re: [/ethanol|flex ?fuel|\bblend\b|\beth\b|e85/] },
   ];
 
   // ---------- small math helpers ----------
@@ -324,6 +325,7 @@ const Core = (() => {
     for (const f of FIELDS) {
       let c = [];
       norm.forEach((h, i) => { if (used.has(i)) return; if (f.not && f.not.test(h)) return; if (f.re.some(r => r.test(h))) c.push(i); });
+      if (f.key === 'load' && c.length > 1) { const v = c.find(i => !/calc/.test(norm[i])); if (v != null) c = [v, ...c.filter(i => i !== v)]; }
       if (f.key === 'maf') { const v = c.find(i => /volt|\(v\)|\bv\b/.test(norm[i])); if (v != null) c = [v, ...c.filter(i => i !== v)]; }
       if (c.length) { map[f.key] = c[0]; used.add(c[0]); }
     }
@@ -367,7 +369,12 @@ const Core = (() => {
     if (d.knock) d.knock = d.knock.map(v => v == null ? null : Math.abs(v));
     if (d.maf) d.units.mafVolt = maxOf(d.maf) <= 5.5 && /volt|\(v\)|\bv\b/.test(H('maf')) || maxOf(d.maf) <= 5.2;
     if (d.tps) d.units.pedal = /pedal|accel|\bapp\b/.test(H('tps'));
-    if (d.speed) d.units.speed = /km/.test(H('speed')) ? 'km/h' : 'mph';
+    if (d.speed) d.units.speed = /km|kph/.test(H('speed')) || (/^vss$/.test(H('speed').trim()) && !/mph/.test(H('speed'))) ? 'km/h' : 'mph';
+    if (d.ethanol) {
+      if (maxOf(d.ethanol) <= 1.5) d.ethanol = d.ethanol.map(v => v == null ? null : v * 100);
+      const m = median(d.ethanol); d.ethPct = isFinite(m) ? m : null;
+    }
+    if (d.units.e85Scale && d.ethPct == null) d.ethPct = 85;
     return d;
   }
 
@@ -416,7 +423,11 @@ const Core = (() => {
   function knock(d) {
     if (!d.knock) return null;
     const idx = []; for (let i = 0; i < d.n; i++) if (d.knock[i] >= 0.5) idx.push(i);
-    if (!idx.length) return { sev: 'ok', title: 'No knock', short: d.rpm ? `Knock retard stayed at 0° all the way to ${Math.round(maxOf(d.rpm))} rpm.` : 'Knock retard stayed at 0° for the whole log.' };
+    if (!idx.length) {
+      const flat = clean(d.knock).every(v => v === 0) && d.wot && d.wot.filter(Boolean).length * dtOf(d) >= 3;
+      const base = d.rpm ? `Knock retard stayed at 0° all the way to ${Math.round(maxOf(d.rpm))} rpm.` : 'Knock retard stayed at 0° for the whole log.';
+      return { sev: 'ok', title: 'No knock', short: base + (flat ? ' It never moved at all, even at full throttle. If you have never seen this channel show anything, check it is logging correctly.' : '') };
+    }
     const ev = clusters(idx, d.t, 0.6), mx = maxOf(pick(d.knock, idx));
     const found = [`${ev.length} knock event${ev.length > 1 ? 's' : ''}. The ECU pulled up to <b>${mx.toFixed(1)}°</b> of ignition timing to protect the engine.`];
     let where = '';
@@ -483,15 +494,17 @@ const Core = (() => {
     if (d.rpm) { chart.series.push({ y: sl(d.rpm), cls: 'warn', name: 'RPM', axis: 'r' }); chart.y2label = 'RPM'; }
     if (!leanIdx.length) return { sev: 'ok', title: 'Full-throttle mixture is safe', short: `Richest-to-leanest at full throttle: ${minOf(afrW).toFixed(1)}–${mx.toFixed(1)} AFR.` };
     const mxL = maxOf(pick(d.afr, leanIdx));
-    const sev = mxL >= 13.6 ? 'crit' : (leanIdx.length >= 3 ? 'warn' : 'ok');
+    const eth = d.ethPct != null && d.ethPct >= 50;
+    const sev = mxL >= (eth ? 13.9 : 13.6) ? 'crit' : (leanIdx.length >= 3 ? 'warn' : 'ok');
     if (sev === 'ok') return { sev: 'ok', title: 'Full-throttle mixture is safe', short: `Peaked at ${mx.toFixed(1)} AFR only briefly.` };
     const leanStart = d.rpm ? rnd(minOf(pick(d.rpm, leanIdx)), 100) : null;
     const found = [`Under full throttle the air/fuel ratio reached <b>${mx.toFixed(1)}</b>${d.rpm ? ` at ${Math.round(d.rpm[iMax])} rpm` : ''}.`];
     if (d.afrTarget && !d.targetFrozen && d.afrTarget[iMax] != null) found.push(`The tune asked for ${d.afrTarget[iMax].toFixed(1)} there, so it ran ${(mx - d.afrTarget[iMax]).toFixed(1)} leaner than commanded.`);
     found.push(`${Math.round(share * 100)}% of full-throttle time was leaner than 13.2${leanStart ? `, starting around ${leanStart} rpm` : ''}.`);
+    if (eth) found.push(`Ethanol content about E${Math.round(d.ethPct)}. Readings on this page are gasoline-equivalent AFR (λ × 14.7), so λ ${(mxL / 14.7).toFixed(2)} shows as ${mxL.toFixed(1)}.`);
     found.push(`Found ${pulls.length} full-throttle pull${pulls.length > 1 ? 's' : ''}. The graph zooms in on the worst one.`);
     return {
-      id: 'lean', facts: { mx, leanStart, risesWithRpm: !!(d.rpm && leanStart && leanStart > 4000) }, focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR held at ${mxL.toFixed(1)} or leaner under load. Safe target is about 12.5–13.0.`,
+      id: 'lean', facts: { mx, leanStart, risesWithRpm: !!(d.rpm && leanStart && leanStart > 4000) }, focusT: [tA, tB], sev, title: 'Lean at full throttle', short: `AFR held at ${mxL.toFixed(1)} or leaner under load. ${eth ? `That is λ ${(mxL / 14.7).toFixed(2)} on E${Math.round(d.ethPct)}. Most E85 tunes aim for λ 0.80–0.85.` : 'Safe target is about 12.5–13.0.'}`,
       found,
       why: 'A lean mixture under load burns hotter. It raises cylinder and exhaust temperatures and makes knock much more likely. Naturally aspirated engines are usually safe around 12.5–13.0 AFR at full throttle.',
       fixes: [
@@ -786,6 +799,49 @@ const Core = (() => {
     return out;
   }
 
+  // Ethanol content from a flex-fuel sensor (or a manual blend value).
+  function ethanol(d) {
+    if (!d.ethanol || d.ethPct == null) return null;
+    const lo = Math.round(pct(d.ethanol, 0.01)), hi = Math.round(pct(d.ethanol, 0.99)), med = Math.round(d.ethPct);
+    if (hi - lo < 10) return { sev: 'ok', title: `Ethanol E${med}`, short: `Ethanol content (or flex blend) stayed at ${lo === hi ? lo : `${lo}–${hi}`}% for the whole log.` };
+    return {
+      id: 'ethanol', facts: { lo, hi, med }, sev: 'warn', title: 'Ethanol content changed', short: `Ethanol reading moved between E${lo} and E${hi}.`,
+      found: [`The ethanol reading moved between <b>E${lo}</b> and <b>E${hi}</b> during this log.`, 'After a fill-up it takes a few miles for the new fuel to mix and reach the sensor, so a slow change is normal. Jumps back and forth are not.'],
+      why: 'A flex-fuel ECU blends its gasoline and E85 tables by this number. If it is wrong, fueling and timing are wrong with it.',
+      chart: { type: 'line', x: d.t, series: [{ y: d.ethanol, cls: 's1', name: 'Ethanol (%)' }], ylabel: 'Ethanol (%)' },
+    };
+  }
+
+  // One long-term trim area pinned near its limit (the ECU logs the trim of the area it is in).
+  function ltftmax(d) {
+    if (!d.ltft) return null;
+    const dt = dtOf(d);
+    const big = []; for (let i = 0; i < d.n; i++) {
+      const v = d.ltft[i]; if (v == null || Math.abs(v) < 12) continue;
+      if (d.fuelStatus && d.fuelStatus[i] !== 2) continue;
+      if (d.ect && !(d.ect[i] >= 70)) continue;
+      big.push(i);
+    }
+    const secs = big.length * dt;
+    if (secs < 30) return null;
+    const val = median(pick(d.ltft, big)), first = big[0];
+    let loadLo = null, loadHi = null, earlier = null;
+    if (d.load) {
+      loadLo = Math.round(pct(pick(d.load, big), 0.1)); loadHi = Math.round(pct(pick(d.load, big), 0.9));
+      const before = []; for (let i = 0; i < first; i++) if (d.load[i] >= loadLo && d.load[i] <= loadHi && d.ltft[i] != null && (!d.fuelStatus || d.fuelStatus[i] === 2)) before.push(d.ltft[i]);
+      if (before.length * dt >= 30) earlier = median(before);
+    }
+    const found = [`Long-term fuel trim read <b>${sgn(val)}%</b> for ${Math.round(secs)} s${loadLo != null ? `, at ${loadLo}–${loadHi}% load` : ''}.`];
+    if (earlier != null && Math.abs(earlier - val) >= 5) found.push(`Earlier in the same log, the same load range read ${sgn(earlier)}%. So it changed during this drive.`);
+    found.push(`It first reached that level ${Math.round(d.t[first] / 60)} min into the log.`);
+    return {
+      id: 'ltftmax', facts: { val, secs, earlier, loadLo, loadHi, firstMin: d.t[first] / 60 }, focusT: [d.t[first] - 30, d.t[first] + 60], sev: 'warn',
+      title: `Fuel trim at ${sgn(val)}%`, short: `One trim area read ${sgn(val)}% for ${Math.round(secs)} s.`, found,
+      why: 'A trim this large means fueling in that area is off by about that much before the ECU corrects it. Near its limit the ECU cannot correct any further, and at full throttle it does not correct at all.',
+      chart: { type: 'line', x: d.t, series: [{ y: d.ltft, cls: 's1', name: 'Long-term trim (%)' }, ...(d.load ? [{ y: d.load, cls: 'warn', name: 'Load (%)', axis: 'r' }] : [])], ylabel: 'Trim (%)', y2label: 'Load (%)' },
+    };
+  }
+
   const WANT = [
     ['knock', 'Knock retard', 'knock'],
     ['afr', 'Wideband AFR', 'lean mixture and cruise economy'],
@@ -800,7 +856,7 @@ const Core = (() => {
 
   function analyze(d) {
     d.wot = wotMask(d);
-    const res = [knock, lean, loadcap, hle, fuelcut, trims, cruise, iat, ect, idle].map(f => f(d)).filter(Boolean);
+    const res = [knock, lean, loadcap, hle, fuelcut, trims, ltftmax, cruise, iat, ect, idle, ethanol].map(f => f(d)).filter(Boolean);
     if (d.units.e85Scale) res.push({ sev: 'ok', title: 'Wideband read on the E85 scale', short: 'Air/fuel readings were converted to the gasoline scale (14.7 = stoichiometric) so every check uses the same limits.' });
     const order = { crit: 0, warn: 1, ok: 2, skip: 3 };
     const issues = res.filter(r => r.sev === 'crit' || r.sev === 'warn').sort((a, b) => order[a.sev] - order[b.sev]);
@@ -815,8 +871,10 @@ const Core = (() => {
       loadcap: { chans: ['load', 'rpm', 'tps', 'afr'], rel: ['rpm', 'load', 'afr'] },
       hle: { chans: ['afr', 'rpm', 'tps', 'load'], rel: ['rpm', 'afr', 'load'] },
       fuelcut: { chans: ['tps', 'afr', 'rpm', 'speed', 'fuelStatus'], rel: ['tps', 'afr', 'rpm'] },
+      ltftmax: { chans: ['ltft', 'stft', 'load', 'rpm', 'afr'], rel: ['load', 'ltft', 'rpm'] },
+      ethanol: { chans: ['ethanol', 'ltft', 'afr', 'rpm'], rel: ['ethanol', 'ltft', 'afr'] },
     };
-    issues.forEach(i => Object.assign(i, FOCUS[i.id] || {}));
+    issues.forEach(i => { Object.assign(i, FOCUS[i.id] || {}); if (d.ethPct != null) i.facts = Object.assign({}, i.facts, { ethPct: d.ethPct }); });
     const passed = res.filter(r => r.sev === 'ok');
     const skipped = res.filter(r => r.sev === 'skip');
     const missing = WANT.filter(([k]) => k === 'stft' ? !d.stft && !d.ltft : k === 'load' ? !d.load && !d.tps : !d[k]).map(([, l, why]) => ({ label: l, why }));
@@ -829,7 +887,7 @@ const Core = (() => {
     { key: 'intake', label: 'Intake and MAF housing', opts: [['stock', 'Stock'], ['modified', 'Aftermarket or modified']] },
     { key: 'injectors', label: 'Injectors', opts: [['stock', 'Original for this engine'], ['upgraded', 'Upgraded']] },
     { key: 'engine', label: 'Engine', opts: [['stock', 'Original, stock'], ['swap', 'Swapped (e.g. 2.5 MZR)'], ['modified', 'Modified internals']] },
-    { key: 'octane', label: 'Fuel', opts: [['unknown', 'Not sure'], ['87', '87 (US)'], ['91', '91 (US)'], ['93', '93 (US)'], ['ron95', '95 RON (Europe)'], ['ron98', '98 RON (Europe)'], ['e85', 'E85 (ethanol)']] },
+    { key: 'octane', label: 'Fuel', opts: [['unknown', 'Not sure'], ['87', '87 (US)'], ['91', '91 (US)'], ['93', '93 (US)'], ['ron95', '95 RON (Europe)'], ['ron98', '98 RON (Europe)'], ['e85', 'E85 (ethanol)'], ['flex', 'Flex fuel (any ethanol mix)']] },
     { key: 'software', label: 'Tuning software', opts: [['other', 'Other or not sure'], ['versatuner', 'VersaTuner (NC Miata)'], ['romdrop', 'RomDrop (NC Miata)'], ['ncflash', 'NC Flash']] },
   ];
 
@@ -850,6 +908,10 @@ const Core = (() => {
     dfco: { versatuner: '"Decel Fuel Cut RPM Threshold" and "Decel Fuel Cut Load Threshold"', romdrop: 'the "DFCO Disable" patch (most people keep fuel cut on)', generic: 'the decel fuel cut thresholds' },
     idleRpm: { versatuner: '"Idle RPM – In Gear" and "Idle RPM – Neutral"', generic: 'the idle target rpm table' },
     fan: { romdrop: '"Engine Control – Fan"', generic: 'the fan temperature settings' },
+    flexOn: { romdrop: '"Flex Fuel - Activation" and "Flex Fuel - CAN Broadcast ID" (under Engine Sensor - Flex Fuel)', generic: 'the flex-fuel sensor settings' },
+    ethScale: { romdrop: '"[Flex] IPW - Base - Ethanol scaling"', generic: 'the ethanol fuel scaling' },
+    flexOl: { romdrop: 'the [Flex] pair of "Fuel Target OL – Base" and its "[Flex] Fuel Target OL Blend"', generic: 'the E85 full-throttle fuel target table' },
+    flexSpark: { romdrop: 'the [Flex] spark tables, such as "[Flex] Spark Target | High Fuel Demand, Low-Det", and "[Flex] Spark Target Blend"', generic: 'the E85 timing table' },
   };
   const SRC = { versatuner: 'VersaTuner name', romdrop: 'RomDrop guide name' };
   const nm = (key, sw) => { const n = NAMES[key] || {}; return n[sw] ? `${n[sw]} [${SRC[sw]}]` : (n.generic || ''); };
@@ -857,6 +919,9 @@ const Core = (() => {
   function advise(issue, setup) {
     const f = issue.facts || {}, S = Object.assign({ intake: 'stock', injectors: 'stock', engine: 'stock', octane: 'unknown', software: 'other' }, setup || {});
     const sw = S.software, swap = S.engine === 'swap', notStock = S.engine !== 'stock';
+    // Ethanol: picked by the user, or read from the log's flex sensor.
+    const eth = S.octane === 'e85' || S.octane === 'flex' || (f.ethPct != null && f.ethPct >= 50);
+    const ethTxt = f.ethPct != null ? `E${Math.round(f.ethPct)}` : 'E85';
     const allStock = S.intake === 'stock' && S.injectors === 'stock' && S.engine === 'stock';
     const a = { note: '', check: [], tune: [], noTune: '', table: null };
     const injCheck = swap
@@ -867,7 +932,9 @@ const Core = (() => {
     switch (issue.id) {
       case 'trims': {
         const head = ['Airflow range', 'Samples', 'Avg trim'];
-        if (S.octane === 'e85') a.check.push('On E85, check the tune is set up for ethanol. If it was written for gasoline, the ECU has to add about 30–40% fuel through trims, and trims will also shift whenever the ethanol content of your fill-up changes.');
+        if (eth) a.check.push(`On ${ethTxt}, check the tune is set up for ethanol. If it was written for gasoline, the ECU has to add about 30–40% fuel through trims, and trims also shift whenever the ethanol content of your fill-up changes.`);
+        if (eth && f.pos && f.pattern === 'all') a.check.push('Positive trims of a similar size everywhere on ethanol often mean the ethanol fuel scaling is a little low, or the real ethanol content is different from what the sensor reports. Check the fuel with an ethanol tester.');
+        if (eth && f.pos) a.tune.push(`If leaks and fuel pressure check out and trims stay positive everywhere, raise ${nm('ethScale', sw)} a little, then re-log.`);
         const worstRow = f.rows && f.rows.length ? f.rows.reduce((w, r) => Math.abs(r.m) > Math.abs(w.m) ? r : w) : null;
         const thin = worstRow && worstRow.n < 100;
         if (S.intake === 'modified') {
@@ -911,7 +978,7 @@ const Core = (() => {
         const warmUp = f.coldShare != null && f.coldShare >= 0.7 && f.ectF != null;
         if (S.octane === '87') a.check.push('You are running 87. If your tune was built for premium fuel, that alone explains the knock. Go back to 91–93 and re-log before changing the tune.');
         else if (S.octane === 'ron95') a.check.push('You are running 95 RON, which is about the same as 91 in the US. Many tunes are written for US 93, which is about 98 RON. If yours was, switch to 98 and re-log before changing the tune.');
-        else if (S.octane === 'e85') a.check.push('E85 resists knock very well, so knock on E85 is unusual. The real ethanol content of pump E85 changes with season and country, and can be much lower than 85%. Check it with an ethanol tester before changing the tune. Also check for false knock from mechanical noise.');
+        else if (eth) a.check.push('E85 resists knock very well, so knock on E85 is unusual. The real ethanol content of pump E85 changes with season and country, and can be much lower than 85%. Check it with an ethanol tester before changing the tune. Also check for false knock from mechanical noise.');
         else if (S.octane === 'unknown') a.check.push('Confirm the fuel octane matches what the tune was built for. A tune made for premium will knock on regular fuel. US pump numbers read about 4 lower than European RON: US 91 is about 95 RON, and US 93 is about 98 RON.');
         if (warmUp) {
           a.note = `Most of this knock happened before the engine was fully warm (coolant about ${Math.round(f.ectF)}°F).${f.warmClean >= 30 ? ` This log also has ${Math.round(f.warmClean)} s at the same rpm and load with warm coolant and no knock.` : ''} That points at a warm-up condition, not the main timing map.`;
@@ -937,10 +1004,13 @@ const Core = (() => {
         if (S.injectors === 'upgraded' || swap) a.check.push(injCheck);
         a.check.push('Rule out a false reading. Check for exhaust leaks ahead of the O2 sensor. If you use an add-on wideband, do its free-air calibration.');
         a.check.push(f.risesWithRpm ? 'The lean starts high in the rev range, which points at fuel delivery. Check fuel pressure under load, the fuel filter and the pump.' : 'Check fuel pressure under load, the fuel filter and the pump.');
-        if (S.octane === 'e85') a.check.push('E85 needs about 30–40% more fuel than gasoline. Check that your injectors and fuel pump can supply it. Stock parts often run out near redline on E85.');
-        a.tune.push(`If the checks pass, add fuel in ${nm('wotAfr', sw)}${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the mixture reads about 12.5–12.8 AFR (λ 0.85–0.87)${S.octane === 'e85' ? '. On a wideband set to the E85 scale that shows as about 8.3–8.5' : ''}.`);
+        if (eth) {
+          a.note = (swap ? a.note + ' ' : '') + `On ${ethTxt} a slightly lean mixture is less dangerous than on gasoline, because ethanol burns cooler and resists knock. Most E85 tunes still aim for about λ 0.80–0.85 at full throttle.`;
+          a.check.push('E85 needs about 30–40% more fuel than gasoline. Check that your injectors and fuel pump can supply it. Stock parts often run out near redline on E85.');
+          a.tune.push(`If the checks pass, add fuel in ${sw === 'romdrop' ? nm('flexOl', sw) : nm('wotAfr', sw)}${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the mixture reads about λ 0.82–0.85 (12.1–12.5 on this page's gasoline scale, or 8.0–8.3 on a wideband set to the E85 scale).`);
+        } else a.tune.push(`If the checks pass, add fuel in ${nm('wotAfr', sw)}${f.leanStart ? ` above ${f.leanStart} rpm` : ''} until the mixture reads about 12.5–12.8 AFR (λ 0.85–0.87).`);
         if (f.risesWithRpm) a.tune.push(`Also check ${nm('hle', sw)}. It leans the mixture at high rpm and load on purpose.`);
-        a.noTune = 'Stay out of full throttle until this is fixed. Lean and loaded is how engines break.';
+        a.noTune = eth ? 'Keep full throttle short until this is fixed.' : 'Stay out of full throttle until this is fixed. Lean and loaded is how engines break.';
         break;
       }
       case 'loadcap': {
@@ -949,6 +1019,27 @@ const Core = (() => {
         if (swap) a.check.push(dispCheck);
         a.check.push(f.afrMed != null && f.afrMed > 13.2 ? `The mixture during the flat part was about ${f.afrMed.toFixed(1)} AFR, which is lean. Fuel follows load, so a capped load means too little fuel. No full throttle until this is fixed.` : 'Look at the mixture during the flat part. Fuel follows load, so a capped load can mean too little fuel.');
         a.tune.push(`If the engine size is right, raise ${nm('loadLimit', sw)} a little above the highest load on a clean pull. Then re-log and check mixture and knock before going higher.`);
+        break;
+      }
+      case 'ltftmax': {
+        a.note = `One trim area sat at ${sgnS(f.val)}%${f.earlier != null && Math.abs(f.earlier - f.val) >= 5 ? `, after reading ${sgnS(f.earlier)}% earlier in the same drive` : ''}. A trim that jumps during one drive points at something that changed, not at the base tune.`;
+        if (f.val > 0) {
+          a.check.push('Smoke-test for vacuum and intake leaks. Hoses can open up once the engine bay gets hot.');
+          a.check.push('Check the purge (EVAP) valve. One that sticks when hot changes the mixture at light load.');
+          a.check.push('Check fuel pressure, especially after a long hard drive.');
+        } else {
+          a.check.push('Check for a leaking injector, fuel pressure that is too high, and a purge (EVAP) valve stuck open.');
+        }
+        if (eth) a.check.push('On ethanol, a change in ethanol content also moves trims. Check the flex sensor reading stayed steady (see the Ethanol line).');
+        a.check.push('Log another drive. If the trim settles back on its own, it was a one-off. If it stays, follow the checks above.');
+        a.noTune = 'Do not tune around a trim that changed in the middle of a drive. Find what changed first.';
+        break;
+      }
+      case 'ethanol': {
+        a.check.push('If you filled up during or just before this log, a slow change is normal while the new fuel mixes in. Re-log after a few miles.');
+        a.check.push('If it jumps back and forth, check the flex sensor wiring and connector.');
+        a.check.push(`Check the sensor is set up in the tune: ${nm('flexOn', sw)}.`);
+        a.noTune = 'No tune change needed for the reading itself. Fix the sensor or wait for the fuel to mix.';
         break;
       }
       case 'fuelcut': {
